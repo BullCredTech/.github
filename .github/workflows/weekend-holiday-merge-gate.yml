@@ -6,6 +6,16 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
   pull_request_review:
     types: [submitted, dismissed]
+  workflow_dispatch:
+    inputs:
+      fake_date:
+        description: 'Data/hora simulada em BRT (ex: 2026-05-29T21:00:00). Vazio = hora real.'
+        required: false
+        default: ''
+      fake_pr_number:
+        description: 'Número de PR deste repo pra avaliar reviews (só usado em dry-run).'
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -22,7 +32,12 @@ jobs:
           script: |
             const TZ = 'America/Sao_Paulo';
             const OWNER = 'lucas-bullbanker';
-            const now = new Date();
+            const dryRun = context.eventName === 'workflow_dispatch';
+            const fakeDateStr = (context.payload.inputs && context.payload.inputs.fake_date) || '';
+            const fakePrNumber = (context.payload.inputs && context.payload.inputs.fake_pr_number) || '';
+
+            // BRT é UTC-3 sem DST. Concatenar offset garante interpretação correta independente do TZ do runner.
+            const now = fakeDateStr ? new Date(`${fakeDateStr}-03:00`) : new Date();
 
             const fmtDate = d => new Intl.DateTimeFormat('en-CA', { timeZone: TZ }).format(d);
             const fmtWeekday = d => new Intl.DateTimeFormat('en-US', { timeZone: TZ, weekday: 'short' }).format(d);
@@ -30,15 +45,17 @@ jobs:
             const todayStr = fmtDate(now);
             const tomorrowStr = fmtDate(new Date(now.getTime() + 86400000));
             const dow = fmtWeekday(now);
-
             const year = todayStr.slice(0, 4);
+            const prefix = dryRun ? '[DRY-RUN] ' : '';
+
             let holidays = [];
             try {
               const resp = await fetch(`https://brasilapi.com.br/api/feriados/v1/${year}`);
               if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
               holidays = (await resp.json()).map(h => h.date);
             } catch (e) {
-              core.setFailed(`Falha ao carregar feriados nacionais (${e.message}). Bloqueando por precaução. Re-execute após o serviço voltar ou contacte @${OWNER}.`);
+              const msg = `Falha ao carregar feriados nacionais (${e.message}). Bloqueando por precaução.`;
+              if (dryRun) core.info(`${prefix}${msg}`); else core.setFailed(msg);
               return;
             }
 
@@ -48,7 +65,7 @@ jobs:
             const restricted = isWeekend || isHoliday || isEve;
 
             if (!restricted) {
-              core.info(`OK — fora da janela restrita (${dow} ${todayStr} BRT).`);
+              core.info(`${prefix}OK — fora da janela restrita (${dow} ${todayStr} BRT).`);
               return;
             }
 
@@ -58,22 +75,27 @@ jobs:
               isEve     && `véspera de feriado (${tomorrowStr})`,
             ].filter(Boolean).join(' + ');
 
+            const prNumber = dryRun
+              ? (fakePrNumber ? parseInt(fakePrNumber, 10) : null)
+              : context.payload.pull_request.number;
+
+            if (!prNumber) {
+              const msg = `${prefix}Restrita (${reasons}) — sem PR pra avaliar review state. Informe fake_pr_number.`;
+              if (dryRun) core.info(msg); else core.setFailed(msg);
+              return;
+            }
+
             const { data: reviews } = await github.rest.pulls.listReviews({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              pull_number: context.payload.pull_request.number,
+              pull_number: prNumber,
             });
-
-            const lastByOwner = reviews
-              .filter(r => r.user && r.user.login === OWNER)
-              .pop();
+            const lastByOwner = reviews.filter(r => r.user && r.user.login === OWNER).pop();
             const approved = lastByOwner?.state === 'APPROVED';
 
             if (!approved) {
-              core.setFailed(
-                `Merge bloqueado (${reasons}). PRs em sex/sáb/dom, feriado nacional ou véspera de feriado ` +
-                `exigem aprovação explícita de @${OWNER}.`
-              );
+              const msg = `${prefix}Merge bloqueado (${reasons}). PR #${prNumber} sem aprovação de @${OWNER}.`;
+              if (dryRun) core.info(msg); else core.setFailed(msg);
             } else {
-              core.info(`OK (${reasons}) — aprovado por @${OWNER}.`);
+              core.info(`${prefix}OK (${reasons}) — PR #${prNumber} aprovado por @${OWNER}.`);
             }
