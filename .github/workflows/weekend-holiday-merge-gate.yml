@@ -1,0 +1,79 @@
+name: weekend-holiday-merge-gate
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+  pull_request_review:
+    types: [submitted, dismissed]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Evaluate weekend / holiday merge gate
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const TZ = 'America/Sao_Paulo';
+            const OWNER = 'lucas-bullbanker';
+            const now = new Date();
+
+            const fmtDate = d => new Intl.DateTimeFormat('en-CA', { timeZone: TZ }).format(d);
+            const fmtWeekday = d => new Intl.DateTimeFormat('en-US', { timeZone: TZ, weekday: 'short' }).format(d);
+
+            const todayStr = fmtDate(now);
+            const tomorrowStr = fmtDate(new Date(now.getTime() + 86400000));
+            const dow = fmtWeekday(now);
+
+            const year = todayStr.slice(0, 4);
+            let holidays = [];
+            try {
+              const resp = await fetch(`https://brasilapi.com.br/api/feriados/v1/${year}`);
+              if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+              holidays = (await resp.json()).map(h => h.date);
+            } catch (e) {
+              core.setFailed(`Falha ao carregar feriados nacionais (${e.message}). Bloqueando por precaução. Re-execute após o serviço voltar ou contacte @${OWNER}.`);
+              return;
+            }
+
+            const isWeekend = ['Fri', 'Sat', 'Sun'].includes(dow);
+            const isHoliday = holidays.includes(todayStr);
+            const isEve     = holidays.includes(tomorrowStr);
+            const restricted = isWeekend || isHoliday || isEve;
+
+            if (!restricted) {
+              core.info(`OK — fora da janela restrita (${dow} ${todayStr} BRT).`);
+              return;
+            }
+
+            const reasons = [
+              isWeekend && `${dow} BRT`,
+              isHoliday && `feriado nacional (${todayStr})`,
+              isEve     && `véspera de feriado (${tomorrowStr})`,
+            ].filter(Boolean).join(' + ');
+
+            const { data: reviews } = await github.rest.pulls.listReviews({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+            });
+
+            const lastByOwner = reviews
+              .filter(r => r.user && r.user.login === OWNER)
+              .pop();
+            const approved = lastByOwner?.state === 'APPROVED';
+
+            if (!approved) {
+              core.setFailed(
+                `Merge bloqueado (${reasons}). PRs em sex/sáb/dom, feriado nacional ou véspera de feriado ` +
+                `exigem aprovação explícita de @${OWNER}.`
+              );
+            } else {
+              core.info(`OK (${reasons}) — aprovado por @${OWNER}.`);
+            }

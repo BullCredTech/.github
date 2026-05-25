@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Reporte de vulnerabilidade de segurança
+    url: https://github.com/BullCredTech/.github/blob/main/SECURITY.md
+    about: NÃO abra issue pública. Veja a política de segurança da organização.
+  - name: Suporte interno
+    url: https://github.com/BullCredTech/.github/blob/main/SUPPORT.md
+    about: Canais para dúvidas, incidentes e solicitações.

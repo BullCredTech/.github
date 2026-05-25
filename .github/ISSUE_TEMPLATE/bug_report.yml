@@ -1,0 +1,62 @@
+name: Bug report
+description: Reportar um comportamento inesperado ou regressão
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Obrigado por reportar. Para vulnerabilidades de segurança, **não abra issue pública** — veja [SECURITY.md](https://github.com/BullCredTech/.github/blob/main/SECURITY.md).
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: O que aconteceu?
+      description: Descreva o comportamento observado.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: O que era esperado?
+      description: Comportamento que você esperava.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Passos para reproduzir
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: Ambiente (staging / production / dev local)
+      placeholder: production
+    validations:
+      required: true
+
+  - type: input
+    id: timestamp
+    attributes:
+      label: Quando ocorreu (data/hora + fuso)
+      placeholder: 2026-05-24 15:30 BRT
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / evidências relevantes
+      description: Cole trechos de log, IDs de proposta/contrato, screenshots. **Mascare PII (CPF, telefone, email).**
+      render: text
+
+  - type: input
+    id: impact
+    attributes:
+      label: Impacto (quantas operações / valor / origens afetadas)
+      placeholder: Ex.- 12 propostas, R$ 300k, origens DM e ARO

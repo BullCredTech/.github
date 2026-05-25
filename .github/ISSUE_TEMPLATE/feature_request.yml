@@ -1,0 +1,43 @@
+name: Feature request
+description: Sugerir uma nova funcionalidade ou melhoria
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Qual problema essa feature resolve?
+      description: Descreva o problema/dor antes de propor a solução.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposta
+      description: Solução proposta. Cite alternativas consideradas.
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Escopo / não-escopo
+      description: O que está fora desta feature?
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Prioridade percebida
+      options:
+        - P0 — bloqueador
+        - P1 — alta
+        - P2 — média
+        - P3 — baixa
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Contexto adicional
+      description: Links, mockups, métricas que justifiquem a feature.
