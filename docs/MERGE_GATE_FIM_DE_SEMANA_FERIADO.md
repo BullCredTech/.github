@@ -59,6 +59,17 @@ Esse override **deixa rastro auditável** no log da org. Use só quando o impact
 - O ruleset que torna o status check obrigatório vive na configuração de rulesets da organização (`Settings → Code, planning, and automation → Rulesets`).
 - Em caso de indisponibilidade da BrasilAPI, o gate falha fechado — bloqueia o merge por precaução. Re-executar a check depois que a API voltar costuma resolver.
 
+## Exceções concedidas
+
+Alguns repositórios são isentos de parte das proteções de merge na `main`. A exceção é **aplicada nas org Rulesets** (`Settings → Code, planning, and automation → Rulesets`) por um admin e **registrada nesta tabela** com motivo e data, pra manter rastro auditável.
+
+| Repositório | Isento de | Motivo | Aprovado por | Data |
+|---|---|---|---|---|
+| `bull-web-portfolio-dashboards` | Gate de fim de semana/feriado | (pré-existente — sem registro documentado) | — | — |
+| `bull-datascience-analises` | Gate de fim de semana/feriado **+** exigência de aprovação humana de PR | Repo de análises exploratórias; iteração rápida sem gargalo de review humano, mantendo os controles de segurança | @lucas-bullbanker | 2026-07-27 |
+
+**Importante:** isentar da aprovação humana **não** remove os demais controles. O `bull-datascience-analises` continua exigindo PR (push direto na `main` bloqueado), passa pelos 4 security checks obrigatórios (Gitleaks, Semgrep, Trivy, License) e mantém proteção contra deleção e force-push — tudo via a ruleset dedicada **`Protect main — bull-datascience-analises (sem review humano)`**. A isenção só zera o número de aprovações exigidas.
+
 ## Testando o gate antes de uma mudança real
 
 O workflow expõe um `workflow_dispatch` com inputs `fake_date` (ex.: `2026-12-24T18:00:00`) e `fake_pr_number`. Disparando manualmente pela aba Actions, é possível simular qualquer cenário sem precisar esperar a data real. Em modo dispatch, o gate roda em "dry-run" — apenas loga o resultado, nunca falha o run.
@@ -81,4 +92,4 @@ Não. Só feriados nacionais. Se quiser cobrir, basta estender o workflow com um
 Sim. Cada PR na fila é reavaliado individualmente.
 
 **Posso desabilitar o gate pro meu repo?**
-Não unilateralmente. O ruleset é org-wide e managed via configuração centralizada. Exceção via PR no `.github` adicionando o repo à lista de excluídos do ruleset, aprovada pelo owner.
+Não unilateralmente. O ruleset é org-wide e managed via configuração centralizada. A exceção é decidida e aprovada pelo owner via PR neste repo (`.github`) — que registra o motivo na seção [Exceções concedidas](#exceções-concedidas) — e aplicada por um admin adicionando o repo ao `exclude` do ruleset nas org Settings. A lista de excluídos vive nas org Rulesets, **não** em arquivo deste repositório; o PR serve como rastro da decisão, não como o mecanismo técnico.
