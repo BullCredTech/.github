@@ -67,8 +67,26 @@ Alguns repositórios são isentos de parte das proteções de merge na `main`. A
 |---|---|---|---|---|
 | `bull-web-portfolio-dashboards` | Gate de fim de semana/feriado | (pré-existente — sem registro documentado) | — | — |
 | `bull-datascience-analises` | Gate de fim de semana/feriado **+** exigência de aprovação humana de PR | Repo de análises exploratórias; iteração rápida sem gargalo de review humano, mantendo os controles de segurança | @lucas-bullbanker | 2026-07-27 |
+| Família `bull-datalake` (8 repos — [lista abaixo](#família-bull-datalake-2026-08-20)) | Gate de fim de semana/feriado | Pipelines de ingestão executam sábado e domingo; correção de carga quebrada não pode esperar até segunda | @lucas-bullbanker | 2026-08-20 |
 
 **Importante:** isentar da aprovação humana **não** remove os demais controles. O `bull-datascience-analises` continua exigindo PR (push direto na `main` bloqueado), passa pelos 4 security checks obrigatórios (Gitleaks, Semgrep, Trivy, License) e mantém proteção contra deleção e force-push — tudo via a ruleset dedicada **`Protect main — bull-datascience-analises (sem review humano)`**. A isenção só zera o número de aprovações exigidas.
+
+### Família `bull-datalake` (2026-08-20)
+
+Repositórios no `exclude` da ruleset `weekend-holiday-merge-gate-required`:
+
+- `bull-datalake`
+- `bull-datalake-bi`
+- `bull-datalake-cobranca`
+- `bull-datalake-data-science`
+- `bull-datalake-financeiro`
+- `bull-datalake-operacao`
+- `bull-datalake-pipelines`
+- `bull-datalake-template`
+
+A isenção cobre **apenas** o gate de fim de semana/feriado. Os 8 repos continuam integralmente sob a ruleset `Protect main branch`: PR obrigatório (push direto na `main` bloqueado), 1 aprovação humana, os 4 security checks (Gitleaks, Semgrep, Trivy, License), dismissal de review stale em push, resolução de threads e proteção contra deleção e force-push.
+
+**Por que nomes explícitos e não o padrão `bull-datalake*`:** um wildcard isentaria automaticamente qualquer repositório futuro com esse prefixo — sem PR, sem motivo registrado e sem data, o que contradiz o modelo de exceção descrito acima. Com os nomes listados um a um, um repo novo da família **nasce coberto pelo gate** e só sai dele por decisão registrada. Ao criar um `bull-datalake-*` novo, decida explicitamente se ele entra na isenção e, se sim, abra PR aqui.
 
 ## Testando o gate antes de uma mudança real
 
