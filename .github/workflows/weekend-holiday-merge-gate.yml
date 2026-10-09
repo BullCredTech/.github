@@ -41,6 +41,10 @@ jobs:
 
             const fmtDate = d => new Intl.DateTimeFormat('en-CA', { timeZone: TZ }).format(d);
             const fmtWeekday = d => new Intl.DateTimeFormat('en-US', { timeZone: TZ, weekday: 'short' }).format(d);
+            const fmtHour = d => Number(new Intl.DateTimeFormat('en-US', { timeZone: TZ, hour: '2-digit', hourCycle: 'h23' }).format(d));
+
+            // Sexta e véspera de feriado só ficam restritas à noite: até lá, o dia útil segue normal.
+            const EVENING_CUTOFF_HOUR = 20;
 
             const todayStr = fmtDate(now);
             const tomorrowStr = fmtDate(new Date(now.getTime() + 86400000));
@@ -59,10 +63,12 @@ jobs:
               return;
             }
 
-            const isWeekend = ['Fri', 'Sat', 'Sun'].includes(dow);
-            const isHoliday = holidays.includes(todayStr);
-            const isEve     = holidays.includes(tomorrowStr);
-            const restricted = isWeekend || isHoliday || isEve;
+            const isEvening   = fmtHour(now) >= EVENING_CUTOFF_HOUR;
+            const isWeekend   = ['Sat', 'Sun'].includes(dow);
+            const isFriNight  = dow === 'Fri' && isEvening;
+            const isHoliday   = holidays.includes(todayStr);
+            const isEveNight  = holidays.includes(tomorrowStr) && isEvening;
+            const restricted = isWeekend || isFriNight || isHoliday || isEveNight;
 
             if (!restricted) {
               core.info(`${prefix}OK — fora da janela restrita (${dow} ${todayStr} BRT).`);
@@ -70,9 +76,10 @@ jobs:
             }
 
             const reasons = [
-              isWeekend && `${dow} BRT`,
-              isHoliday && `feriado nacional (${todayStr})`,
-              isEve     && `véspera de feriado (${tomorrowStr})`,
+              isWeekend  && `${dow} BRT`,
+              isFriNight && `sexta após ${EVENING_CUTOFF_HOUR}h BRT`,
+              isHoliday  && `feriado nacional (${todayStr})`,
+              isEveNight && `véspera de feriado após ${EVENING_CUTOFF_HOUR}h (${tomorrowStr})`,
             ].filter(Boolean).join(' + ');
 
             const prNumber = dryRun

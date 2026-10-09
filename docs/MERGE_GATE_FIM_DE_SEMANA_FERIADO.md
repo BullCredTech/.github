@@ -18,9 +18,12 @@ O gate trava o merge se **qualquer** uma das condições for verdadeira, avaliad
 
 | Condição | Exemplo |
 |---|---|
-| O dia atual é **sexta**, **sábado** ou **domingo** | PR aberto sábado às 15h BRT |
+| O dia atual é **sábado** ou **domingo** | PR aberto sábado às 15h BRT |
+| O dia atual é **sexta**, a partir das **20h** | PR aprovado sexta às 20h30 BRT (às 19h59 o gate passa) |
 | O dia atual é **feriado nacional** | Corpus Christi, 7 de setembro, etc. |
-| O dia seguinte é **feriado nacional** (véspera) | Quarta-feira anterior a Corpus Christi |
+| O dia seguinte é **feriado nacional** (véspera), a partir das **20h** | Quarta-feira anterior a Corpus Christi, às 21h |
+
+Sexta e véspera de feriado ficam restritas só a partir das 20h: durante o dia ainda há gente para acompanhar um deploy, e a janela de risco é a noite e o dia seguinte.
 
 Quando mais de uma condição se aplica, todas são listadas na mensagem (ex.: `Sun BRT + véspera de feriado (2026-09-07)`).
 
