@@ -13,7 +13,7 @@ Repositório org-level que hospeda os community health files e workflows reutili
 | `SUPPORT.md` | Canais de suporte interno |
 | `.github/PULL_REQUEST_TEMPLATE.md` | Template padrão de PR |
 | `.github/ISSUE_TEMPLATE/*.yml` | Templates de issue (bug, feature) |
-| `.github/workflows/weekend-holiday-merge-gate.yml` | Workflow do gate de merge em sex-sáb-dom + feriado + véspera |
+| `.github/workflows/weekend-holiday-merge-gate.yml` | Workflow do gate de merge em sáb-dom + feriado, e sexta e véspera de feriado a partir das 20h |
 
 ## Como sobrescrever em repos específicos
 
