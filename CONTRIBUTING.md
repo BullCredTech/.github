@@ -25,7 +25,7 @@ Obrigado por contribuir com os repositórios da BullCredTech. Este guia cobre as
 
 - Nunca commite segredos. Use `.env.example` para documentar variáveis necessárias.
 - Pre-commit hook (gitleaks) está habilitado nos repos com infraestrutura sensível.
-- Dependências: zero vulnerabilidades moderadas+. `npm audit` rodando em CI.
+- Dependências: o check obrigatório `Trivy` bloqueia o merge de vulnerabilidades críticas ou altas com correção disponível; as demais seguem os prazos-alvo da [SECURITY.md](./SECURITY.md).
 - Reports de vulnerabilidade: ver [SECURITY.md](./SECURITY.md).
 
 ## Testes
