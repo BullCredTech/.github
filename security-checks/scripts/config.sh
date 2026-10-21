@@ -58,11 +58,10 @@ lic_desc=$(q '((.license // {}) | keys - ["extra_allowed"]) | join(",")')
 sg_desc=$(q '((.semgrep // {}) | keys - ["extra_configs"]) | join(",")')
 [ -z "$sg_desc" ] || erro "chave desconhecida em semgrep: $sg_desc"
 
-# docs_paths: globs simples, nunca catch-all
+# docs_paths: só "dir/**" (segmentos literais + **). O ".md" em qualquer lugar já é regra embutida.
 while IFS= read -r c; do
-  [[ "$c" =~ ^[A-Za-z0-9._/*-]+$ ]] || erro "docs_paths: entrada inválida: '$c'"
-  [[ "$c" != /* && "$c" != *..* ]] || erro "docs_paths: sem / inicial nem '..': '$c'"
-  [[ "$c" =~ [A-Za-z0-9._-] ]] || erro "docs_paths: padrão genérico demais: '$c'"
+  [[ "$c" =~ ^([A-Za-z0-9._-]+/)+\*\*$ ]] || erro "docs_paths: use só o formato dir/** : '$c'"
+  [[ "$c" != /* && ! "$c" =~ (^|/)\.+(/|$) ]] || erro "docs_paths: sem / inicial nem segmentos '.' ou '..': '$c'"
 done < <(q '(.docs_paths // [])[]')
 
 # license.extra_allowed: ids SPDX

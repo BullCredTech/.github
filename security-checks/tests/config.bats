@@ -247,3 +247,14 @@ EOT
   [ "$status" -eq 0 ]
   [[ "$output" == *"config_present=true"* ]]
 }
+
+@test "docs_paths só aceita dir/** (segmentos literais + **)" {
+  for e in '"s*"' '"*.js"' '"**/handbook/**"' '"handbook"' '"handbook/*"' '"**/*.md"' '"handbook/**/x"' '"a/./b/**"'; do
+    docs "$e"
+    run bash "$SCRIPT" "$REPO"
+    [ "$status" -eq 2 ] || { echo "passou: $e"; return 1; }
+  done
+  docs '"notes/**", "a/b-c/d_e.f/**"'
+  run bash "$SCRIPT" "$REPO"
+  [ "$status" -eq 0 ]
+}
