@@ -22,13 +22,13 @@ commit() { git add -A; git commit -qm c; git rev-parse HEAD; }
 }
 
 @test "cobre todos os arquivos de configuração das ferramentas" {
-  for f in .gitleaks.toml .gitleaksignore .semgrepignore .semgrep.yml .trivyignore trivy.yaml; do echo base > "$f"; done
+  for f in .gitleaks.toml .gitleaksignore .semgrepignore .semgrep.yml .trivyignore trivy.yaml trivy-secret.yaml .trivyignore.yaml; do echo base > "$f"; done
   BASE=$(commit)
-  for f in .gitleaks.toml .gitleaksignore .semgrepignore .semgrep.yml .trivyignore trivy.yaml; do echo pr > "$f"; done
+  for f in .gitleaks.toml .gitleaksignore .semgrepignore .semgrep.yml .trivyignore trivy.yaml trivy-secret.yaml .trivyignore.yaml; do echo pr > "$f"; done
   commit >/dev/null
   run bash "$SCRIPT" "$BASE"
   [ "$status" -eq 0 ]
-  for f in .gitleaks.toml .gitleaksignore .semgrepignore .semgrep.yml .trivyignore trivy.yaml; do
+  for f in .gitleaks.toml .gitleaksignore .semgrepignore .semgrep.yml .trivyignore trivy.yaml trivy-secret.yaml .trivyignore.yaml; do
     [ "$(cat "$f")" = base ] || { echo "não restaurou $f"; return 1; }
   done
 }
