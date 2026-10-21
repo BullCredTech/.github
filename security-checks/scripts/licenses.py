@@ -21,11 +21,13 @@ LICENSE na raiz do pacote, daí a detecção por marcador textual.
 Uso:
   licenses.py pip  --allow "MIT;Apache-2.0" < saida-do-pip-licenses.json
   licenses.py npm  --allow "MIT;Apache-2.0" < saida-do-npmwalk.json   (mesmo formato)
+  licenses.py site <site-packages>   (imprime o inventário JSON das distribuições instaladas, sem executar nada)
   licenses.py dart --allow "MIT;Apache-2.0" <diretorio-do-projeto>
 Saída: 0 se tudo permitido; 1 se há licença fora da lista. Licença vazia/UNKNOWN
 só avisa ("sem licença declarada").
 """
 import argparse
+import importlib.metadata as imd
 import json
 import os
 import re
@@ -166,6 +168,40 @@ def inventario_dart(diretorio):
     return pacotes
 
 
+_BASE = {'pip', 'setuptools', 'wheel', 'distribute', '_distutils_hack'}
+
+
+def _licenca_dist(meta):
+    """Expressão SPDX (PEP 639) > classificadores `License ::` > campo License (texto longo é reconhecido)."""
+    expr = (meta.get('License-Expression') or '').strip()
+    if expr:
+        return expr
+    classes = []
+    for c in meta.get_all('Classifier') or []:
+        if c.startswith('License ::') and c.strip() != 'License :: OSI Approved':
+            classes.append(c.split(' :: ')[-1].strip())
+    if classes:
+        return '; '.join(classes)
+    campo = (meta.get('License') or '').strip()
+    if campo and ('\n' in campo or len(campo) > 100):
+        return detectar_licenca(campo)
+    return campo
+
+
+def inventario_site(diretorio):
+    """Inventário das distribuições instaladas em `diretorio`, lendo só metadados (.dist-info/.egg-info).
+
+    Não importa nem executa nada instalado; roda com `-I -S` (sem processar .pth).
+    """
+    pacotes = {}
+    for dist in imd.distributions(path=[diretorio]):
+        nome = dist.metadata['Name'] or '?'
+        if nome.lower().replace('_', '-') in _BASE:
+            continue
+        pacotes[(nome, dist.version)] = {'Name': nome, 'Version': dist.version, 'License': _licenca_dist(dist.metadata)}
+    return sorted(pacotes.values(), key=lambda p: (p['Name'].lower(), p['Version']))
+
+
 def _permitido(termo, permitidas):
     if termo in permitidas:
         return True
@@ -206,11 +242,16 @@ def avaliar(pacotes, permitidas, estrito=False):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
-    ap.add_argument('modo', choices=['pip', 'npm', 'dart'])
-    ap.add_argument('--allow', required=True, help='SPDX separados por ";"')
+    ap.add_argument('modo', choices=['pip', 'npm', 'dart', 'site'])
+    ap.add_argument('--allow', default='', help='SPDX separados por ";"')
     ap.add_argument('diretorio', nargs='?', default='.')
     args = ap.parse_args(argv)
 
+    if args.modo == 'site':
+        print(json.dumps(inventario_site(args.diretorio)))
+        return 0
+    if not args.allow:
+        ap.error('--allow é obrigatório')
     permitidas = permitidas_normalizadas(args.allow)
     if args.modo in ('pip', 'npm'):
         try:
@@ -218,7 +259,7 @@ def main(argv=None):
         except ValueError as e:  # JSONDecodeError é ValueError
             print(f'entrada inválida do inventário ({args.modo}): {e}', file=sys.stderr)
             return 2
-        origem = 'pip-licenses' if args.modo == 'pip' else 'node_modules'
+        origem = 'ambiente python' if args.modo == 'pip' else 'node_modules'
     else:
         pacotes = inventario_dart(args.diretorio)
         origem = args.diretorio

@@ -83,3 +83,32 @@ def test_dart_rooturi_relativo_resolve_contra_dart_tool(tmp_path):
         cfg.write_text(json.dumps({"packages": [{"name": "p", "rootUri": uri}]}))
         r = run(["dart", "--allow", ALLOW, str(tmp_path / "app")])
         assert r.returncode == 0 and "sem licença declarada" not in r.stdout, (uri, r.stdout)
+
+# ---- modo site: inventário das distribuições instaladas, sem importar código instalado ----
+def _dist(site, nome, versao, metadata_extra):
+    d = site / f"{nome}-{versao}.dist-info"; d.mkdir(parents=True)
+    (d / "METADATA").write_text(f"Metadata-Version: 2.1\nName: {nome}\nVersion: {versao}\n{metadata_extra}\n")
+
+def test_site_inventaria_expressao_classificador_e_texto(tmp_path):
+    site = tmp_path / "site-packages"; site.mkdir()
+    _dist(site, "comexpr", "1.0", "License-Expression: MIT-0")
+    _dist(site, "comclass", "2.0", "Classifier: License :: OSI Approved :: BSD License\nClassifier: License :: OSI Approved\n")
+    _dist(site, "comtexto", "3.0", "License: Permission is hereby granted, free of charge, to any person obtaining a copy\n of this software")
+    _dist(site, "semnada", "4.0", "License: UNKNOWN")
+    _dist(site, "pip", "99", "License-Expression: MIT")
+    r = run(["site", "--allow", "x", str(site)])
+    assert r.returncode == 0, r.stderr
+    inv = {p["Name"]: p["License"] for p in json.loads(r.stdout)}
+    assert inv["comexpr"] == "MIT-0"
+    assert inv["comclass"] == "BSD License"
+    assert inv["comtexto"] == "mit"
+    assert inv["semnada"] in ("", "UNKNOWN")
+    assert "pip" not in inv
+
+def test_site_nao_executa_codigo_instalado(tmp_path):
+    site = tmp_path / "site-packages"; site.mkdir()
+    marcador = tmp_path / "EXECUTOU"
+    (site / "evil.pth").write_text(f"import os; open({str(marcador)!r}, 'w').write('x')\n")
+    _dist(site, "x", "1.0", "License-Expression: MIT")
+    r = subprocess.run([sys.executable, "-I", "-S", str(SCRIPT), "site", str(site)], capture_output=True, text=True)
+    assert r.returncode == 0 and not marcador.exists()

@@ -632,3 +632,85 @@ central_fixture() {
   rm -rf "$C"
   [ "$status" -ne 0 ]; [[ "$output" == *"verificador alterado durante o job"* ]] || return 1
 }
+
+# ---------- hardening: .pth, yarn-path, npmrc git, integridade em volta de cada passo ----------
+make_evil_wheel() { # $1 = diretório de saída, $2 = marcador, $3 = licença
+  python3 - "$1" "$2" "$3" <<'PYX'
+import sys, zipfile
+out, marker, lic = sys.argv[1:4]
+nome = "evilpkg-1.0-py3-none-any.whl"
+with zipfile.ZipFile(f"{out}/{nome}", "w") as z:
+    z.writestr("evilpkg/__init__.py", "")
+    z.writestr("evil.pth", f"import os; open({marker!r}, 'w').write('x')\n")
+    z.writestr("evilpkg-1.0.dist-info/METADATA", f"Metadata-Version: 2.1\nName: evilpkg\nVersion: 1.0\nLicense-Expression: {lic}\n")
+    z.writestr("evilpkg-1.0.dist-info/WHEEL", "Wheel-Version: 1.0\nGenerator: t\nRoot-Is-Purelib: true\nTag: py3-none-any\n")
+    z.writestr("evilpkg-1.0.dist-info/RECORD", "evilpkg/__init__.py,,\nevil.pth,,\nevilpkg-1.0.dist-info/METADATA,,\nevilpkg-1.0.dist-info/WHEEL,,\nevilpkg-1.0.dist-info/RECORD,,\n")
+PYX
+}
+
+@test "C1: .pth de wheel não executa durante a avaliação e a licença é inventariada" {
+  mkdir -p "$REPO/svc" "$SHIMS/idx"; marker="$SHIMS/PTH_EXECUTOU"
+  make_evil_wheel "$SHIMS/idx" "$marker" "MIT"
+  echo "evilpkg==1.0" > "$REPO/svc/requirements.txt"
+  PIP_NO_INDEX=1 PIP_FIND_LINKS="$SHIMS/idx" run bash "$SCRIPT" check "$REPO" "$ALLOW" ""
+  [ "$status" -eq 0 ]
+  [ ! -e "$marker" ]
+  [[ "$output" == *"1 pacotes inventariados"* ]] || return 1
+}
+
+@test "C1: licença do pacote com .pth é avaliada (GPL reprova) sem executar o .pth" {
+  mkdir -p "$REPO/svc" "$SHIMS/idx"; marker="$SHIMS/PTH_EXECUTOU"
+  make_evil_wheel "$SHIMS/idx" "$marker" "GPL-3.0-only"
+  echo "evilpkg==1.0" > "$REPO/svc/requirements.txt"
+  PIP_NO_INDEX=1 PIP_FIND_LINKS="$SHIMS/idx" run bash "$SCRIPT" check "$REPO" "$ALLOW" ""
+  [ "$status" -ne 0 ]
+  [ ! -e "$marker" ]
+  [[ "$output" == *"evilpkg"* ]] || return 1
+}
+
+@test "C2: yarn-path do .yarnrc não executa (YARN_IGNORE_PATH)" {
+  command -v yarn >/dev/null || skip "yarn ausente"
+  mkdir -p "$REPO/app/packages/a"; marker="$SHIMS/YARN_EXECUTOU"
+  printf '{"name":"app","version":"1.0.0","private":true,"workspaces":["packages/*"]}' > "$REPO/app/package.json"
+  printf '{"name":"a","version":"1.0.0","license":"MIT"}' > "$REPO/app/packages/a/package.json"
+  printf '# yarn lockfile v1\n\n\n' > "$REPO/app/yarn.lock"
+  printf 'console.log("x"); require("fs").writeFileSync(%s, "x");\n' "\"$marker\"" > "$REPO/app/evil.js"
+  printf 'yarn-path "./evil.js"\n' > "$REPO/app/.yarnrc"
+  run bash "$SCRIPT" check "$REPO" "$ALLOW" ""
+  [ ! -e "$marker" ]
+  [ "$status" -eq 0 ]
+}
+
+@test "C3: git do .npmrc não executa; npm roda com o git real" {
+  command -v npm >/dev/null || skip "npm ausente"; command -v git >/dev/null || skip "git ausente"
+  mkdir -p "$REPO/app" "$SHIMS/dep"; marker="$SHIMS/NPM_GIT_EXECUTOU"
+  ( cd "$SHIMS/dep" && git init -q . && git config user.email t@t && git config user.name t \
+    && printf '{"name":"evilpkg","version":"1.0.0","license":"MIT"}' > package.json && git add -A && git commit -qm c )
+  sha="$(git -C "$SHIMS/dep" rev-parse HEAD)"
+  printf '{"name":"app","version":"1.0.0","private":true,"dependencies":{"evilpkg":"git+file://%s#%s"}}' "$SHIMS/dep" "$sha" > "$REPO/app/package.json"
+  ( cd "$REPO/app" && npm install --package-lock-only --ignore-scripts --no-audit --no-fund >/dev/null 2>&1 ) || skip "npm não resolveu o git+file offline"
+  printf '#!/bin/sh\necho x > "%s"\nexec git "$@"\n' "$marker" > "$SHIMS/evil.sh"; chmod +x "$SHIMS/evil.sh"
+  printf 'git=%s\n' "$SHIMS/evil.sh" > "$REPO/app/.npmrc"
+  run bash "$SCRIPT" check "$REPO" "$ALLOW" ""
+  [ ! -e "$marker" ]
+  [ "$status" -eq 0 ]
+}
+
+@test "I1: adulteração durante o npm query é pega" {
+  central_fixture
+  ws_root; mkdir -p "$REPO/node_modules"; nm "$REPO/node_modules/x" x 1.0.0 ',"license":"MIT"'; ln -s ../packages/a "$REPO/node_modules/a"
+  printf '[{"location":"packages/a"}]' > "$SHIMS/query.json"
+  shim npm 'case "$1" in query) echo evil > "'"$C"'/security-checks/scripts/evil.js"; cat "'"$SHIMS"'/query.json" ;; *) exit 0 ;; esac'
+  ORG_SECURITY_SHA="$CSHA" PATH="$SHIMS:$PATH" run bash "$C/security-checks/scripts/license.sh" check "$REPO" "$ALLOW" ""
+  rm -rf "$C"
+  [ "$status" -ne 0 ]; [[ "$output" == *"verificador alterado durante o job"* ]] || return 1
+}
+
+@test "I1: adulteração durante o go list é pega" {
+  central_fixture
+  mkdir -p "$REPO/svc"; echo 'module m' > "$REPO/svc/go.mod"
+  shim go 'echo evil > "'"$C"'/security-checks/scripts/evil.js"; echo m'
+  ORG_SECURITY_SHA="$CSHA" PATH="$SHIMS:$PATH" run bash "$C/security-checks/scripts/license.sh" check "$REPO" "$ALLOW" ""
+  rm -rf "$C"
+  [ "$status" -ne 0 ]; [[ "$output" == *"verificador alterado durante o job"* ]] || return 1
+}

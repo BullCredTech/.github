@@ -175,6 +175,14 @@ integridade() {
 }
 
 [ "$cmd" = "check" ] || { echo "comando inválido: $cmd" >&2; exit 2; }
+# Interpretador do SISTEMA, resolvido antes de qualquer venv ser ativado. Todo Python do verificador roda com
+# `-I -S`: sem site, sem .pth (um wheel instalado pode trazer um .pth, que executa código em qualquer
+# interpretador que processe o site) e sem ler nada do diretório do script.
+SYS_PY="$(command -v python3 || true)"
+[ -n "$SYS_PY" ] || { echo "python3 não encontrado" >&2; exit 2; }
+# Configuração do repo que faria npm/yarn executar um programa do repo: neutralizada.
+export YARN_IGNORE_PATH=1          # ignora `yarn-path` do .yarnrc
+export npm_config_git=git          # ignora `git=./programa` do .npmrc (e as flags --git=git abaixo)
 integridade || { resumo "❌ licença: verificador alterado durante o job"; exit 1; }
 allowfile="${3:?}"; extras="${4:-}"
 allow="$(grep -vE '^[[:space:]]*(#|$)' "$allowfile" | paste -sd ';' -)"
@@ -190,20 +198,24 @@ node_checar() { # $1 = dir, $2 = rótulo (npm|yarn)
   local d="$1" rot="$2" decl hasd wsdirs="" w inv
   local -a arr=() wargs=() margs=()
   decl="$(node "$here/workspaces.js" declared "$d")" || return 1
+  integridade || return 1
   if [ "$rot" = npm ]; then
-    (cd "$d" && npm ci --ignore-scripts --omit=dev --no-audit --no-fund >/dev/null) || return 1
+    (cd "$d" && npm ci --git=git --ignore-scripts --omit=dev --no-audit --no-fund >/dev/null) || return 1
   else
     (cd "$d" && yarn install --frozen-lockfile --ignore-scripts --production >/dev/null) || return 1
   fi
+  integridade || return 1
   NWS=0
   if [ "$decl" = true ]; then
+    integridade || return 1
     if [ "$rot" = npm ]; then
-      wsdirs="$(cd "$d" && npm query .workspace | node "$here/workspaces.js" npmdirs "$d")" \
+      wsdirs="$(cd "$d" && npm query --git=git .workspace | node "$here/workspaces.js" npmdirs "$d")" \
         || { msg "workspaces: não consegui listar os workspaces de $(rel "$d") com 'npm query'"; return 1; }
     else
       wsdirs="$(cd "$d" && yarn workspaces info --json | node "$here/workspaces.js" yarndirs "$d")" \
         || { msg "workspaces: não consegui listar os workspaces de $(rel "$d") com 'yarn workspaces info'"; return 1; }
     fi
+    integridade || return 1
     [ -n "$wsdirs" ] || { msg "workspaces: declarados em $(rel "$d"), mas o gerenciador não listou nenhum"; return 1; }
     while IFS= read -r w; do
       [ -n "$w" ] || continue
@@ -221,7 +233,7 @@ $w"; done
   integridade || { rm -f "$inv"; return 1; }
   node "$here/npmwalk.js" "$d" ${margs[@]+"${margs[@]}"} ${wargs[@]+"${wargs[@]}"} > "$inv" || { rm -f "$inv"; return 1; }
   integridade || { rm -f "$inv"; return 1; }
-  python3 -I "$here/licenses.py" npm --allow "$allow" < "$inv" || { rm -f "$inv"; return 1; }
+  "$SYS_PY" -I -S "$here/licenses.py" npm --allow "$allow" < "$inv" || { rm -f "$inv"; return 1; }
   rm -f "$inv"
 }
 
@@ -270,9 +282,9 @@ done < <(achar package.json)
 # O check de licença NÃO executa código do repo nem de terceiros: só wheels (`--only-binary=:all:`), sem
 # `pip install .`, sem build a partir de sdist. Dependências dinâmicas (pyproject `dynamic`, setup.py/setup.cfg)
 # não se conhecem sem executar o projeto, então reprovam.
-py_instalar() { # $1 = arquivo de requisitos
+py_instalar() { # $@ = argumentos -r <arquivo> (uma única chamada do pip: nenhum pip roda depois de instalar)
   local saida
-  saida="$(pip install -q --only-binary=:all: -r "$1" 2>&1)" || {
+  saida="$(pip install -q --only-binary=:all: "$@" 2>&1)" || {
     msg "dependência sem wheel (build a partir do código-fonte não é permitido no check de licença): $(printf '%s' "$saida" | tail -5 | tr '\n' ' '); peça exceção"
     return 1
   }
@@ -303,7 +315,7 @@ py_checar() { # $1 = dir do projeto, $2 = dir temporário (já criado)
 
   # pyproject: as dependências declaradas viram um requirements temporário, conferido pelo MESMO parser.
   if [ -f pyproject.toml ]; then
-    python3 -I "$here/pyproject_deps.py" reqs pyproject.toml > "$tmpd/pyproject-req.txt" 2> "$tmpd/pyproject.err" || rc=$?
+    "$SYS_PY" -I -S "$here/pyproject_deps.py" reqs pyproject.toml > "$tmpd/pyproject-req.txt" 2> "$tmpd/pyproject.err" || rc=$?
     case "$rc" in
       0) ;;
       4) msg "python: dependências dinâmicas/setup.py: não suportado no check de licença; declare em requirements ou peça exceção"; return 1 ;;
@@ -329,7 +341,10 @@ py_checar() { # $1 = dir do projeto, $2 = dir temporário (já criado)
     return 0
   fi
 
-  python3 -m venv "$tmpd/venv" || return 1
+  local -a rargs=()
+  local -a sp=()
+  integridade || return 1
+  "$SYS_PY" -m venv "$tmpd/venv" || return 1
   # shellcheck disable=SC1091
   . "$tmpd/venv/bin/activate"
   pip install -q --only-binary=:all: --upgrade pip >/dev/null || return 1
@@ -338,20 +353,24 @@ py_checar() { # $1 = dir do projeto, $2 = dir temporário (já criado)
     uv export --frozen --no-dev --no-hashes --no-emit-project --no-emit-workspace -o "$tmpd/req.txt" >/dev/null || return 1
     PY_VISTOS=""
     py_conferir "$tmpd/req.txt" "$tmpd" 0 >/dev/null || return 1
-    py_instalar "$tmpd/req.txt" || return 1
+    rargs+=(-r "$tmpd/req.txt")
   fi
-  if [ -n "$pj_req" ]; then py_instalar "$pj_req" || return 1; fi
-  for r in ${arqs[@]+"${arqs[@]}"}; do
-    py_instalar "$r" || return 1
-  done
-  pip install -q --only-binary=:all: pip-licenses==5.5.5 || return 1
+  if [ -n "$pj_req" ]; then rargs+=(-r "$pj_req"); fi
+  for r in ${arqs[@]+"${arqs[@]}"}; do rargs+=(-r "$r"); done
+  integridade || return 1
+  py_instalar ${rargs[@]+"${rargs[@]}"} || return 1
+  integridade || return 1
+  # Inventário SEM executar nada do venv: o interpretador do sistema com -I -S lê só os metadados
+  # (.dist-info) do site-packages; um .pth de wheel não é processado.
+  sp=("$tmpd"/venv/lib/python3*/site-packages)
+  [ "${#sp[@]}" -eq 1 ] && [ -d "${sp[0]}" ] || { msg "python: não achei o site-packages do ambiente"; return 1; }
   inv="$tmpd/inv.json"
-  pip-licenses --format=json --from=mixed > "$inv" || return 1
+  "$SYS_PY" -I -S "$here/licenses.py" site "${sp[0]}" > "$inv" || return 1
   # Declarou dependências e o inventário veio vazio: falha fechado.
-  [ "$(python3 -I -c 'import json,sys; print(len(json.load(open(sys.argv[1]))))' "$inv")" -gt 0 ] \
+  [ "$("$SYS_PY" -I -S -c 'import json,sys; print(len(json.load(open(sys.argv[1]))))' "$inv")" -gt 0 ] \
     || { msg "python: $(rel "$d") declara dependências, mas o inventário veio vazio"; return 1; }
   integridade || return 1
-  python3 -I "$here/licenses.py" pip --allow "$allow" < "$inv"
+  "$SYS_PY" -I -S "$here/licenses.py" pip --allow "$allow" < "$inv"
 }
 
 while IFS= read -r d; do
@@ -380,11 +399,13 @@ go_checar() { # $1 = dir
   local mod
   cd "$1" || return 1
   export GOWORK=off GOTOOLCHAIN=local CGO_ENABLED=0   # sem cgo: nada de compilador C rodando código do módulo
+  integridade || return 1
   mod="$(go list -m)" || { echo "go: 'go list -m' falhou"; return 1; }
   [ -n "$mod" ] || { echo "go: 'go list -m' não retornou o módulo"; return 1; }
   integridade || return 1
   go run github.com/google/go-licenses/v2@v2.0.1 check ./... \
-    --allowed_licenses="${allow//;/,}" --ignore "$mod"
+    --allowed_licenses="${allow//;/,}" --ignore "$mod" || return 1
+  integridade
 }
 while IFS= read -r gm; do
   d="$(dirname "$gm")"
@@ -400,7 +421,7 @@ done < <(achar go.mod)
 # ---------------- Flutter ----------------
 while IFS= read -r ps; do
   d="$(dirname "$ps")"
-  (flutter pub get --directory "$d" >/dev/null && integridade && python3 -I "$here/licenses.py" dart --allow "$allow" "$d") \
+  (integridade && flutter pub get --directory "$d" >/dev/null && integridade && "$SYS_PY" -I -S "$here/licenses.py" dart --allow "$allow" "$d") \
     || { resumo "❌ licença: $(rel "$d") (flutter)"; falhou=1; }
   checados=$((checados+1))
 done < <(achar pubspec.yaml)
