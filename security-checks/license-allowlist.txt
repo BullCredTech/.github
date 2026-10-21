@@ -10,3 +10,8 @@ CC0-1.0
 Unlicense
 BlueOak-1.0.0
 Python-2.0
+# Acrescentadas em 21/10/2026 (decisão do CTO): permissivas, já aceitas nas listas próprias do cash-flow e do mobile.
+MIT-0
+MIT-CMU
+Zlib
+PSF-2.0
