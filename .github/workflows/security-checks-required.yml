@@ -57,6 +57,10 @@ jobs:
         run: rm -rf .org-security
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with: { repository: BullCredTech/.github, ref: '${{ steps.central.outputs.sha }}', path: .org-security, persist-credentials: false }
+      # `.org-security` é caminho reservado: se o PR rastreia algo com esse nome, os scans não o cobririam
+      # (o diretório é apagado e excluído deles). Olha a árvore do commit, não a de trabalho.
+      - name: Caminho reservado .org-security
+        run: bash .org-security/security-checks/scripts/reserved.sh "$GITHUB_WORKSPACE"
       - name: Validar os SHAs do evento
         run: |
           set -euo pipefail

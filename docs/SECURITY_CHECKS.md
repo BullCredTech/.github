@@ -19,6 +19,8 @@ O workflow roda nos eventos `pull_request` e `merge_group`, e tem um job de prep
 
 Todas as `uses:` do workflow são fixadas por SHA de commit. Valores dinâmicos entram nos scripts só por variáveis de ambiente.
 
+`.org-security` é um **nome reservado na raiz do repo**: o workflow usa esse diretório para os próprios scripts e o exclui dos scans. Um PR que rastreia qualquer coisa com esse nome (diretório, arquivo, link ou submódulo) reprova o job `org-security / prepare`; renomeie o caminho.
+
 ## 2. PR só de documentação
 
 Se o PR mexe **só em documentação**, Semgrep, Trivy e licença são pulados (com uma linha no resumo do job). **O Gitleaks roda sempre.**
