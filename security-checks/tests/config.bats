@@ -258,3 +258,14 @@ EOT
   run bash "$SCRIPT" "$REPO"
   [ "$status" -eq 0 ]
 }
+
+@test "extra_allowed aceita ids SPDX com -only e -or-later" {
+  cfg <<'EOT'
+version: 1
+license:
+  extra_allowed: ["GPL-2.0-or-later", "LGPL-3.0-only", "AGPL-3.0-or-later", "GPL-2.0+"]
+EOT
+  run bash "$SCRIPT" "$REPO"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"license_extra=GPL-2.0-or-later;LGPL-3.0-only;AGPL-3.0-or-later;GPL-2.0+"* ]] || return 1
+}

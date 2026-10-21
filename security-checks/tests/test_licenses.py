@@ -128,3 +128,53 @@ def test_site_licenca_longa_nao_reconhecida_reprova_e_vazia_so_avisa(tmp_path):
     _dist(site2, "semnada", "1.0", "License: UNKNOWN")
     r2 = run(["pip", "--allow", ALLOW], run(["site", str(site2)]).stdout)
     assert r2.returncode == 0 and "sem licença declarada" in r2.stdout
+
+# ---- classificadores do PyPI viram ids SPDX antes de separar em termos ----
+sys.path.insert(0, str(SCRIPT.parent))
+import licenses as L  # noqa: E402
+
+def test_classificadores_gnu_viram_spdx():
+    casos = {
+        "GNU General Public License v2 or later (GPLv2+)": ["gpl-2.0-or-later"],
+        "GNU General Public License v2 (GPLv2)": ["gpl-2.0-only"],
+        "GNU General Public License v3 (GPLv3)": ["gpl-3.0-only"],
+        "GNU General Public License v3 or later (GPLv3+)": ["gpl-3.0-or-later"],
+        "GNU General Public License (GPL)": ["gpl-2.0-or-later"],
+        "GNU Lesser General Public License v2 (LGPLv2)": ["lgpl-2.0-only"],
+        "GNU Lesser General Public License v2 or later (LGPLv2+)": ["lgpl-2.0-or-later"],
+        "GNU Lesser General Public License v3 (LGPLv3)": ["lgpl-3.0-only"],
+        "GNU Lesser General Public License v3 or later (LGPLv3+)": ["lgpl-3.0-or-later"],
+        "GNU Library or Lesser General Public License (LGPL)": ["lgpl-2.0-or-later"],
+        "GNU Affero General Public License v3": ["agpl-3.0-only"],
+        "GNU Affero General Public License v3 or later (AGPLv3+)": ["agpl-3.0-or-later"],
+        "Mozilla Public License 2.0 (MPL 2.0)": ["mpl-2.0"],
+        "Eclipse Public License 2.0 (EPL-2.0)": ["epl-2.0"],
+        "European Union Public Licence 1.2 (EUPL 1.2)": ["eupl-1.2"],
+        "Python Software Foundation License": ["psf-2.0"],
+        "Academic Free License (AFL)": ["afl-3.0"],
+    }
+    for texto, esperado in casos.items():
+        assert L.termos(texto) == esperado, (texto, L.termos(texto))
+
+def test_or_later_generico_nao_separa_e_or_continua_separando():
+    assert len(L.termos("GNU Foo Public License v9 or later")) == 1
+    assert L.termos("GPL-2.0-or-later") == ["gpl-2.0-or-later"]
+    assert L.termos("GPL-2.0+") == ["gpl-2.0-or-later"]
+    assert L.termos("MIT OR GPL-3.0") == ["mit", "gpl-3.0-only"]
+    assert L.termos("MIT or Apache-2.0") == ["mit", "apache-2.0"]
+
+def test_mutagen_so_passa_com_extra_allowed_exato():
+    gpl = pip_json(("mutagen", "GNU General Public License v2 or later (GPLv2+)"))
+    r = run(["pip", "--allow", ALLOW], gpl)
+    assert r.returncode == 1 and "gpl-2.0-or-later" in r.stdout
+    assert run(["pip", "--allow", ALLOW + ";GPL-2.0-or-later"], gpl).returncode == 0
+    # GPL-2.0-only não cobre "or later"
+    assert run(["pip", "--allow", ALLOW + ";GPL-2.0-only"], gpl).returncode == 1
+
+def test_lgpl_variantes_e_ids_spdx_only_no_extra_allowed():
+    lg = pip_json(("a", "GNU Lesser General Public License v3 (LGPLv3)"))
+    assert run(["pip", "--allow", ALLOW], lg).returncode == 1
+    assert run(["pip", "--allow", ALLOW + ";LGPL-3.0-only"], lg).returncode == 0
+    assert run(["pip", "--allow", ALLOW + ";LGPL-3.0"], lg).returncode == 0   # id antigo equivale a -only
+    bib = pip_json(("b", "GNU Library or Lesser General Public License (LGPL)"))
+    assert run(["pip", "--allow", ALLOW + ";LGPL-2.0-or-later"], bib).returncode == 0

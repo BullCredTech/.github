@@ -36,9 +36,9 @@ from urllib.parse import unquote
 
 # Famílias que reprovam de forma explícita, para a mensagem dizer o motivo.
 NEGADAS = {
-    'gpl-2.0', 'gpl-3.0', 'agpl-3.0', 'lgpl-2.1', 'lgpl-3.0',
     'sspl-1.0', 'busl-1.1', 'osl-3.0', 'eupl-1.2', 'cpal-1.0',
-}
+} | {f'{fam}-{suf}' for fam in ('gpl-2.0', 'gpl-3.0', 'agpl-3.0', 'lgpl-2.0', 'lgpl-2.1', 'lgpl-3.0')
+     for suf in ('only', 'or-later')}
 
 # Grafias equivalentes -> forma normalizada.
 SINONIMOS = {
@@ -59,12 +59,46 @@ SINONIMOS = {
     'mozilla public license 2.0 (mpl 2.0)': 'mpl-2.0',
     'mozilla public license 2.0': 'mpl-2.0',
     'the unlicense (unlicense)': 'unlicense',
-    'gnu general public license v2 (gplv2)': 'gpl-2.0',
-    'gnu general public license v3 (gplv3)': 'gpl-3.0',
-    'gnu lesser general public license v2 (lgplv2)': 'lgpl-2.1',
-    'gnu lesser general public license v3 (lgplv3)': 'lgpl-3.0',
-    'gnu affero general public license v3': 'agpl-3.0',
+    # ids SPDX antigos (sem -only/-or-later) e com sufixo '+' valem como os atuais, para a allowlist e o pacote
+    # se encontrarem independentemente da grafia
+    'gpl-2.0': 'gpl-2.0-only', 'gpl-2.0+': 'gpl-2.0-or-later',
+    'gpl-3.0': 'gpl-3.0-only', 'gpl-3.0+': 'gpl-3.0-or-later',
+    'lgpl-2.0': 'lgpl-2.0-only', 'lgpl-2.0+': 'lgpl-2.0-or-later',
+    'lgpl-2.1': 'lgpl-2.1-only', 'lgpl-2.1+': 'lgpl-2.1-or-later',
+    'lgpl-3.0': 'lgpl-3.0-only', 'lgpl-3.0+': 'lgpl-3.0-or-later',
+    'agpl-3.0': 'agpl-3.0-only', 'agpl-3.0+': 'agpl-3.0-or-later',
 }
+
+# Títulos de classificadores `License ::` do PyPI (e grafias comuns) -> id SPDX. Aplicados ANTES de separar em
+# termos: "GNU General Public License v2 or later (GPLv2+)" tem um " or " que não é o OR de uma expressão.
+# Sem versão ("GNU General Public License (GPL)") vale a leitura conservadora: -or-later (a mais permissiva em
+# versões, então a que precisa de exceção explícita).
+_CLASSIFICADORES = {
+    'gnu affero general public license v3 or later (agplv3+)': 'AGPL-3.0-or-later',
+    'gnu affero general public license v3': 'AGPL-3.0-only',
+    'gnu general public license v2 or later (gplv2+)': 'GPL-2.0-or-later',
+    'gnu general public license v2 (gplv2)': 'GPL-2.0-only',
+    'gnu general public license v3 or later (gplv3+)': 'GPL-3.0-or-later',
+    'gnu general public license v3 (gplv3)': 'GPL-3.0-only',
+    'gnu general public license (gpl)': 'GPL-2.0-or-later',
+    'gnu lesser general public license v2 or later (lgplv2+)': 'LGPL-2.0-or-later',
+    'gnu lesser general public license v2 (lgplv2)': 'LGPL-2.0-only',
+    'gnu lesser general public license v3 or later (lgplv3+)': 'LGPL-3.0-or-later',
+    'gnu lesser general public license v3 (lgplv3)': 'LGPL-3.0-only',
+    'gnu library or lesser general public license (lgpl)': 'LGPL-2.0-or-later',
+    'mozilla public license 1.0 (mpl)': 'MPL-1.0',
+    'mozilla public license 1.1 (mpl 1.1)': 'MPL-1.1',
+    'mozilla public license 2.0 (mpl 2.0)': 'MPL-2.0',
+    'eclipse public license 1.0 (epl-1.0)': 'EPL-1.0',
+    'eclipse public license 2.0 (epl-2.0)': 'EPL-2.0',
+    'european union public licence 1.0 (eupl 1.0)': 'EUPL-1.0',
+    'european union public licence 1.1 (eupl 1.1)': 'EUPL-1.1',
+    'european union public licence 1.2 (eupl 1.2)': 'EUPL-1.2',
+    'python software foundation license': 'PSF-2.0',
+    'academic free license (afl)': 'AFL-3.0',
+}
+_RE_CLASSIFICADOR = re.compile('|'.join(re.escape(k) for k in sorted(_CLASSIFICADORES, key=len, reverse=True)), re.IGNORECASE)
+_RE_OR_LATER = re.compile(r'\s+or\s+(?:any\s+)?later(?:\s+version)?', re.IGNORECASE)
 
 _SEPARADORES = re.compile(r'\s+AND\s+|\s+OR\s+|\s*;\s*|\s*/\s*', re.IGNORECASE)
 
@@ -107,7 +141,9 @@ def normalizar(termo):
 
 def termos(licenca):
     """Todos os termos de um licenciamento, já normalizados e sem vazios."""
-    return [n for n in (normalizar(p) for p in _SEPARADORES.split(licenca or '')) if n]
+    texto = _RE_CLASSIFICADOR.sub(lambda m: _CLASSIFICADORES[m.group(0).lower()], licenca or '')
+    texto = _RE_OR_LATER.sub('+', texto)   # "v9 or later" é um sufixo, não um OR
+    return [n for n in (normalizar(p) for p in _SEPARADORES.split(texto)) if n]
 
 
 def detectar_licenca(texto):
