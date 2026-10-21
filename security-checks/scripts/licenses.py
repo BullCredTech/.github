@@ -72,7 +72,8 @@ _TITULOS = (
     ('gnu lesser general public license', 'lgpl-3.0'),
     ('gnu general public license', 'gpl-3.0'),
     ('apache license', 'apache-2.0'),
-    ('creative commons', 'cc0-1.0'),
+    ('cc0 1.0 universal', 'cc0-1.0'),
+    ('creative commons zero', 'cc0-1.0'),
 )
 
 # Licenças curtas, sem linha de título. BSD-3 antes da BSD-2 (a 3 contém a 2).
@@ -91,6 +92,12 @@ def normalizar(termo):
     """Uma grafia de licença -> a forma canônica. `''` quando não dá para dizer."""
     t = termo.strip().strip('.').strip().lower()
     if not t or t in ('unknown', 'n/a', 'none'):
+        return ''
+    if t in SINONIMOS:
+        return SINONIMOS[t]
+    # Parênteses de expressão SPDX, "(MIT OR Apache-2.0)": tira só os das pontas.
+    t = t.strip('() ').strip()
+    if not t:
         return ''
     return SINONIMOS.get(t, t)
 
@@ -139,8 +146,9 @@ def inventario_dart(diretorio):
         raiz = p.get('rootUri', '')
         if raiz.startswith('file://'):
             raiz = unquote(raiz[len('file://'):])
-        elif raiz.startswith('../'):
-            raiz = os.path.normpath(os.path.join(diretorio, '.dart_tool', raiz))
+        else:
+            # rootUri sem esquema é relativo ao diretório .dart_tool/ (onde está o package_config.json)
+            raiz = os.path.normpath(os.path.join(diretorio, '.dart_tool', unquote(raiz)))
 
         licenca = ''
         for nome_arquivo in ('LICENSE', 'LICENSE.md', 'LICENSE.txt', 'COPYING'):

@@ -46,3 +46,40 @@ def test_allowlist_vem_so_do_argumento():
 def test_pip_json_invalido_falha():
     r = run(["pip", "--allow", ALLOW], "isto não é json")
     assert r.returncode != 0
+
+def test_pip_parenteses_na_expressao_spdx():
+    r = run(["pip", "--allow", ALLOW], pip_json(("x", "(MIT OR Apache-2.0)")))
+    assert r.returncode == 0, r.stdout
+    r = run(["pip", "--allow", ALLOW], pip_json(("x", "(MIT AND GPL-3.0)")))
+    assert r.returncode == 1
+
+def _dart(tmp_path, texto, root_uri):
+    proj = tmp_path / "app" / ".dart_tool"; proj.mkdir(parents=True)
+    (proj / "package_config.json").write_text(json.dumps({"packages": [{"name": "p", "rootUri": root_uri}]}))
+    return run(["dart", "--allow", ALLOW, str(tmp_path / "app")])
+
+def test_dart_creative_commons_que_nao_e_cc0_nao_vira_cc0(tmp_path):
+    pkg = tmp_path / "app" / "pkgs" / "p"; pkg.mkdir(parents=True)
+    (pkg / "LICENSE").write_text("Creative Commons Attribution 4.0 International Public License")
+    r = _dart(tmp_path, "", "../pkgs/p")
+    assert "sem licença declarada" in r.stdout
+
+def test_dart_cc0_e_reconhecido(tmp_path):
+    pkg = tmp_path / "app" / "pkgs" / "p"; pkg.mkdir(parents=True)
+    (pkg / "LICENSE").write_text("CC0 1.0 Universal\n\nStatement of Purpose")
+    proj = tmp_path / "app" / ".dart_tool"; proj.mkdir(parents=True)
+    (proj / "package_config.json").write_text(json.dumps({"packages": [{"name": "p", "rootUri": "../pkgs/p"}]}))
+    r = run(["dart", "--allow", ALLOW + ";CC0-1.0", str(tmp_path / "app")])
+    assert r.returncode == 0, r.stdout
+
+def test_dart_rooturi_relativo_resolve_contra_dart_tool(tmp_path):
+    # rootUri "../pkgs/p" é relativo a .dart_tool/, e "pkgs/p" sem ../ também
+    for uri, base in (("../pkgs/p", tmp_path / "app" / "pkgs" / "p"), ("sub/p", tmp_path / "app" / ".dart_tool" / "sub" / "p")):
+        base.mkdir(parents=True, exist_ok=True)
+        (base / "LICENSE").write_text("Permission is hereby granted, free of charge, to any person obtaining a copy")
+        r = _dart(tmp_path, "", uri) if not (tmp_path / "app" / ".dart_tool").exists() else None
+        cfg = tmp_path / "app" / ".dart_tool" / "package_config.json"
+        cfg.parent.mkdir(parents=True, exist_ok=True)
+        cfg.write_text(json.dumps({"packages": [{"name": "p", "rootUri": uri}]}))
+        r = run(["dart", "--allow", ALLOW, str(tmp_path / "app")])
+        assert r.returncode == 0 and "sem licença declarada" not in r.stdout, (uri, r.stdout)
