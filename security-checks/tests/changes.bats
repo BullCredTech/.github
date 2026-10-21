@@ -13,67 +13,67 @@ commit() { git add -A; git commit -qm c; HEAD_SHA=$(git rev-parse HEAD); }
 @test "só docs: docs_only=true" {
   echo b >> docs/guia.md; echo c >> README.md; commit
   run bash "$SCRIPT" "$REPO" "$BASE" "$HEAD_SHA" ""
-  [ "$status" -eq 0 ]; [[ "$output" == *"docs_only=true"* ]]
+  [ "$status" -eq 0 ]; [[ "$output" == *"docs_only=true"* ]] || return 1
 }
 
 @test "código: docs_only=false" {
   echo y >> src/app.js; commit
   run bash "$SCRIPT" "$REPO" "$BASE" "$HEAD_SHA" ""
-  [[ "$output" == *"docs_only=false"* ]]
+  [[ "$output" == *"docs_only=false"* ]] || return 1
 }
 
 @test "docs e código juntos: docs_only=false" {
   echo b >> docs/guia.md; echo y >> src/app.js; commit
   run bash "$SCRIPT" "$REPO" "$BASE" "$HEAD_SHA" ""
-  [[ "$output" == *"docs_only=false"* ]]
+  [[ "$output" == *"docs_only=false"* ]] || return 1
 }
 
 @test "padrão extra do repo conta como docs" {
   mkdir -p handbook; echo z > handbook/x.txt; commit
   run bash "$SCRIPT" "$REPO" "$BASE" "$HEAD_SHA" "handbook/**"
-  [[ "$output" == *"docs_only=true"* ]]
+  [[ "$output" == *"docs_only=true"* ]] || return 1
 }
 
 @test "utils não é docs" {
   mkdir -p utils; echo z > utils/run.sh; commit
   run bash "$SCRIPT" "$REPO" "$BASE" "$HEAD_SHA" ""
-  [[ "$output" == *"docs_only=false"* ]]
+  [[ "$output" == *"docs_only=false"* ]] || return 1
 }
 
 @test "sem mudança: docs_only=false (escaneia)" {
   run bash "$SCRIPT" "$REPO" "$BASE" "$BASE" ""
-  [[ "$output" == *"docs_only=false"* ]]
+  [[ "$output" == *"docs_only=false"* ]] || return 1
 }
 
 @test "rename de src/ para docs/ conta como código" {
   git mv src/app.js docs/app.md; commit
   run bash "$SCRIPT" "$REPO" "$BASE" "$HEAD_SHA" ""
-  [ "$status" -eq 0 ]; [[ "$output" == *"docs_only=false"* ]]
+  [ "$status" -eq 0 ]; [[ "$output" == *"docs_only=false"* ]] || return 1
 }
 
 @test "arquivo de código apagado: docs_only=false" {
   git rm -q src/app.js; echo b >> docs/guia.md; commit
   run bash "$SCRIPT" "$REPO" "$BASE" "$HEAD_SHA" ""
-  [ "$status" -eq 0 ]; [[ "$output" == *"docs_only=false"* ]]
+  [ "$status" -eq 0 ]; [[ "$output" == *"docs_only=false"* ]] || return 1
 }
 
 @test "base inexistente: falha (não imprime true)" {
   echo b >> docs/guia.md; commit
   run bash "$SCRIPT" "$REPO" "0000000000000000000000000000000000000001" "$HEAD_SHA" ""
   [ "$status" -ne 0 ]
-  [[ "$output" != *"docs_only=true"* ]]
+  [[ "$output" != *"docs_only=true"* ]] || return 1
 }
 
 @test "entradas extras vazias são ignoradas" {
   echo y >> src/app.js; commit
   run bash "$SCRIPT" "$REPO" "$BASE" "$HEAD_SHA" ",,"
-  [ "$status" -eq 0 ]; [[ "$output" == *"docs_only=false"* ]]
+  [ "$status" -eq 0 ]; [[ "$output" == *"docs_only=false"* ]] || return 1
 }
 
 @test "nome de arquivo com quebra de linha é lido inteiro (docs/a<NL>b.md é docs)" {
   echo z > "$(printf 'docs/a\nb.md')"; commit
   run bash "$SCRIPT" "$REPO" "$BASE" "$HEAD_SHA" ""
-  [ "$status" -eq 0 ]; [[ "$output" == *"docs_only=true"* ]]
+  [ "$status" -eq 0 ]; [[ "$output" == *"docs_only=true"* ]] || return 1
 }
 
 # --- extensão de documentação, gitlink, validação de SHA ---
@@ -92,7 +92,7 @@ commit() { git add -A; git commit -qm c; HEAD_SHA=$(git rev-parse HEAD); }
   git update-index --add --cacheinfo 160000,"$BASE",docs/sub
   git commit -qm sub; HEAD_SHA=$(git rev-parse HEAD)
   run bash "$SCRIPT" "$REPO" "$BASE" "$HEAD_SHA" ""
-  [ "$status" -eq 0 ]; [[ "$output" == *"docs_only=false"* ]]
+  [ "$status" -eq 0 ]; [[ "$output" == *"docs_only=false"* ]] || return 1
 }
 
 @test "extensões de documentação em docs/ e .md em qualquer lugar: true" {
@@ -108,10 +108,10 @@ commit() { git add -A; git commit -qm c; HEAD_SHA=$(git rev-parse HEAD); }
 @test "dir extra: handbook/x.txt true, handbook/x.py false" {
   mkdir -p handbook; echo z > handbook/x.txt; commit
   run bash "$SCRIPT" "$REPO" "$BASE" "$HEAD_SHA" "handbook/**"
-  [[ "$output" == *"docs_only=true"* ]]
+  [[ "$output" == *"docs_only=true"* ]] || return 1
   echo z > handbook/x.py; commit
   run bash "$SCRIPT" "$REPO" "$BASE" "$HEAD_SHA" "handbook/**"
-  [[ "$output" == *"docs_only=false"* ]]
+  [[ "$output" == *"docs_only=false"* ]] || return 1
 }
 
 @test "base inválida (opção do git) falha sem criar arquivo" {
@@ -127,15 +127,15 @@ commit() { git add -A; git commit -qm c; HEAD_SHA=$(git rev-parse HEAD); }
 @test "variação de requirements/constraints em docs/ é código" {
   echo z > docs/doc-requirements.txt; commit
   run bash "$SCRIPT" "$REPO" "$BASE" "$HEAD_SHA" ""
-  [ "$status" -eq 0 ]; [[ "$output" == *"docs_only=false"* ]]
+  [ "$status" -eq 0 ]; [[ "$output" == *"docs_only=false"* ]] || return 1
   git reset -q --hard "$BASE"; mkdir -p docs
   echo z > docs/My-Constraints.TXT; commit
   run bash "$SCRIPT" "$REPO" "$BASE" "$HEAD_SHA" ""
-  [[ "$output" == *"docs_only=false"* ]]
+  [[ "$output" == *"docs_only=false"* ]] || return 1
 }
 
 @test "symlink docs/link.md conta como código" {
   ln -s ../src/app.js docs/link.md; commit
   run bash "$SCRIPT" "$REPO" "$BASE" "$HEAD_SHA" ""
-  [ "$status" -eq 0 ]; [[ "$output" == *"docs_only=false"* ]]
+  [ "$status" -eq 0 ]; [[ "$output" == *"docs_only=false"* ]] || return 1
 }

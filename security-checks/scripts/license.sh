@@ -34,7 +34,7 @@ if [ "$cmd" = "pyfiltro" ]; then py_filtro "${2:?}" "${3:-}"; exit 0; fi
 
 root="${2:?}"
 
-if [ "$cmd" = "npmwalk" ]; then node "$here/npmwalk.js" "$root"; exit; fi
+if [ "$cmd" = "npmwalk" ]; then node "$here/npmwalk.js" "$root" "${@:3}"; exit; fi
 
 # Só node_modules, .git, venvs e caches de terraform ficam de fora (build/ e dist/ NÃO: não dá para
 # esconder um subprojeto ali).
@@ -55,7 +55,7 @@ py_dirs() {
     achar Pipfile | dirs_de
     achar Pipfile.lock | dirs_de
     { achar setup.cfg | while IFS= read -r f; do if grep -qE '^\[(metadata|options)' "$f"; then echo "$f"; fi; done; } | dirs_de
-    { achar '*.txt' | grep '/requirements/[^/]*\.txt$' || true; } | dirs_de | dirs_de
+    { achar '*.txt' | while IFS= read -r f; do if [[ "${f#"$root"}" =~ /requirements/[^/]+\.txt$ ]]; then echo "$f"; fi; done; } | dirs_de | dirs_de
   } | sort -u
 }
 
@@ -82,6 +82,8 @@ dentro_de() {
 
 # Parser de requirements por LISTA DE PERMISSÃO: só entra o que é reconhecido; o resto reprova com a linha.
 PY_SPEC_RE='^[a-z0-9][a-z0-9._-]*(\[[a-z0-9,._-]+\])?[[:space:]]*(([<>=!~]=?|===)[^;@[:space:]]+([[:space:]]*,[[:space:]]*([<>=!~]=?|===)[^;@[:space:]]+)*)?([[:space:]]*;.*)?$'
+# alfabeto permitido no marcador de ambiente (depois do primeiro ';')
+PY_MARCADOR_RE="^[a-z0-9_.'\"[:space:]()<>=!~,*-]*\$"
 PY_INC_RE='^(--requirement|--constraint|-r|-c)[[:space:]=]*(.+)$'
 # shellcheck disable=SC2016 # literal de propósito
 PY_DOLAR='${'
@@ -93,6 +95,8 @@ py_conferir() { # $1 = arquivo, $2 = raiz do projeto, $3 = profundidade
   local f="$1" proj="$2" prof="$3" linha acum="" real
   [ "$prof" -le 5 ] || { msg "requirements: inclusões demais em $f"; return 1; }
   [ -f "$f" ] || { msg "requirements: arquivo incluído não existe: $f"; return 1; }
+  # shellcheck disable=SC2094 # só lê $f
+  if ! tr -d '\000' < "$f" | cmp -s - "$f"; then msg "requirements: não permitido em $f: byte NUL"; return 1; fi
   real="$(cd "$(dirname "$f")" && pwd -P)/$(basename "$f")"
   case "$PY_VISTOS" in *"|$real|"*) return 0 ;; esac   # ciclo ou arquivo já conferido
   PY_VISTOS="$PY_VISTOS|$real|"
@@ -106,7 +110,8 @@ py_conferir() { # $1 = arquivo, $2 = raiz do projeto, $3 = profundidade
 }
 
 py_linha() { # $1 = linha, $2 = arquivo, $3 = projeto, $4 = profundidade
-  local linha="$1" f="$2" proj="$3" prof="$4" ll nome antes inc
+  local linha="$1" f="$2" proj="$3" prof="$4" ll nome antes inc marcador
+  linha="${linha#$'\xEF\xBB\xBF'}"   # BOM UTF-8
   linha="${linha//$'\t'/ }"
   case "$linha" in \#*) linha="" ;; esac
   linha="${linha%%[[:space:]]#*}"
@@ -132,6 +137,11 @@ py_linha() { # $1 = linha, $2 = arquivo, $3 = projeto, $4 = profundidade
     msg "requirements: não permitido em $f: $linha"; return 1
   fi
   antes="${ll%%;*}"
+  if [[ "$ll" == *\;* ]]; then
+    marcador="${ll#*;}"
+    [[ "$marcador" =~ $PY_MARCADOR_RE ]] || { msg "requirements: não permitido em $f (marcador com caracteres fora do alfabeto): $linha"; return 1; }
+  fi
+  if [[ "$ll" =~ [[:space:]]- ]]; then msg "requirements: não permitido em $f (opção depois do requisito): $linha"; return 1; fi
   [[ "$ll" =~ ^([a-z0-9][a-z0-9._-]*) ]] && nome="${BASH_REMATCH[1]}"
   if [[ "$antes" == */* || "$nome" =~ \.(whl|zip|gz|tgz|tar|bz2|egg)$ ]]; then
     msg "requirements: não permitido em $f (caminho/arquivo local): $linha"; return 1

@@ -173,14 +173,24 @@ def _permitido(termo, permitidas):
     return termo == 'bsd' and any(p.startswith('bsd-') for p in permitidas)
 
 
-def avaliar(pacotes, permitidas):
-    """`(reprovados, indefinidos)`: cada item é `(nome, versão, licença, razão)`."""
+def avaliar(pacotes, permitidas, estrito=False):
+    """`(reprovados, indefinidos)`: cada item é `(nome, versão, licença, razão)`.
+
+    estrito (npm): sem licença declarada nem reconhecível no LICENSE => reprova, não só avisa.
+    """
     reprovados, indefinidos = [], []
     for p in pacotes:
         nome = p.get('Name', '?')
         versao = p.get('Version', '?')
         licenca = p.get('License', '') or ''
+        if estrito and not termos(licenca):
+            licenca = detectar_licenca(p.get('LicenseText', '') or '')
         lista = termos(licenca)
+        if not lista and estrito:
+            caminho = p.get('Path', '?')
+            reprovados.append((nome, versao, 'UNKNOWN',
+                               f'sem licença declarada: {nome}@{versao} ({caminho}) — se for aceitável, peça exceção'))
+            continue
         if not lista:
             indefinidos.append((nome, versao, licenca or 'UNKNOWN', 'não declarada'))
             continue
@@ -213,7 +223,7 @@ def main(argv=None):
         pacotes = inventario_dart(args.diretorio)
         origem = args.diretorio
 
-    reprovados, indefinidos = avaliar(pacotes, permitidas)
+    reprovados, indefinidos = avaliar(pacotes, permitidas, estrito=(args.modo == 'npm'))
     print(f'{len(pacotes)} pacotes inventariados em: {origem}')
 
     # Licença não declarada NÃO reprova (senão o check vira ruído); sai listada.
@@ -228,7 +238,10 @@ def main(argv=None):
 
     print(f'\nREPROVADO: {len(reprovados)} pacote(s):')
     for nome, versao, licenca, razao in sorted(reprovados):
-        print(f'  - {nome} {versao}: "{licenca}" ({razao})')
+        if razao.startswith('sem licença declarada:'):
+            print(f'  - {razao}')
+        else:
+            print(f'  - {nome} {versao}: "{licenca}" ({razao})')
     print('\nDecida caso a caso: ou o pacote sai, ou a licença entra em '
           '`license.extra_allowed` no .github/security-checks.yml, com o motivo escrito.')
     return 1

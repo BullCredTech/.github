@@ -66,9 +66,11 @@ function main() {
       console.log(path.join(raiz, obj[k].location));
     });
   } else {
-    const algum = [raiz, ...resto].map(lerPkg).some((p) => (
-      (p.dependencies && Object.keys(p.dependencies).length > 0)
-      || (p.optionalDependencies && Object.keys(p.optionalDependencies).length > 0)));
+    const pkgs = [raiz, ...resto].map(lerPkg);
+    const nomes = new Set(pkgs.map((p) => p.name).filter(Boolean)); // dependência em pacote irmão não conta
+    const externas = (p) => [...Object.keys(p.dependencies || {}), ...Object.keys(p.optionalDependencies || {})]
+      .filter((n) => !nomes.has(n));
+    const algum = pkgs.some((p) => externas(p).length > 0);
     console.log(algum ? 'true' : 'false');
   }
 }

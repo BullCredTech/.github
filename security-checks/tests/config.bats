@@ -8,8 +8,8 @@ cfg() { cat > "$REPO/.github/security-checks.yml"; }
 @test "sem arquivo: tudo vazio e config_present=false" {
   run bash "$SCRIPT" "$REPO"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"config_present=false"* ]]
-  [[ "$output" == *"skip="* ]]
+  [[ "$output" == *"config_present=false"* ]] || return 1
+  [[ "$output" == *"skip="* ]] || return 1
 }
 
 @test "arquivo válido: emite listas" {
@@ -26,11 +26,11 @@ skip:
 EOT
   run bash "$SCRIPT" "$REPO"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"config_present=true"* ]]
-  [[ "$output" == *"docs_paths=handbook/**,notes/**"* ]]
-  [[ "$output" == *"license_extra=CC-BY-4.0;MPL-2.0"* ]]
-  [[ "$output" == *"semgrep_extra=--config p/python"* ]]
-  [[ "$output" == *"skip=trivy"* ]]
+  [[ "$output" == *"config_present=true"* ]] || return 1
+  [[ "$output" == *"docs_paths=handbook/**,notes/**"* ]] || return 1
+  [[ "$output" == *"license_extra=CC-BY-4.0;MPL-2.0"* ]] || return 1
+  [[ "$output" == *"semgrep_extra=--config p/python"* ]] || return 1
+  [[ "$output" == *"skip=trivy"* ]] || return 1
 }
 
 @test "versão diferente de 1 falha" {
@@ -39,7 +39,7 @@ version: 2
 EOT
   run bash "$SCRIPT" "$REPO"
   [ "$status" -eq 2 ]
-  [[ "$output" == *"version"* ]]
+  [[ "$output" == *"version"* ]] || return 1
 }
 
 @test "chave desconhecida falha" {
@@ -49,7 +49,7 @@ desligar_tudo: true
 EOT
   run bash "$SCRIPT" "$REPO"
   [ "$status" -eq 2 ]
-  [[ "$output" == *"desligar_tudo"* ]]
+  [[ "$output" == *"desligar_tudo"* ]] || return 1
 }
 
 @test "skip sem reason falha" {
@@ -60,7 +60,7 @@ skip:
 EOT
   run bash "$SCRIPT" "$REPO"
   [ "$status" -eq 2 ]
-  [[ "$output" == *"reason"* ]]
+  [[ "$output" == *"reason"* ]] || return 1
 }
 
 @test "skip do gitleaks não é permitido" {
@@ -72,7 +72,7 @@ skip:
 EOT
   run bash "$SCRIPT" "$REPO"
   [ "$status" -eq 2 ]
-  [[ "$output" == *"gitleaks"* ]]
+  [[ "$output" == *"gitleaks"* ]] || return 1
 }
 
 @test "regra extra do semgrep fora do formato p/ ou r/ falha" {
@@ -83,7 +83,7 @@ semgrep:
 EOT
   run bash "$SCRIPT" "$REPO"
   [ "$status" -eq 2 ]
-  [[ "$output" == *"extra_configs"* ]]
+  [[ "$output" == *"extra_configs"* ]] || return 1
 }
 
 @test "YAML inválido falha" {
@@ -135,7 +135,7 @@ docs() { printf 'version: 1\ndocs_paths: [%s]\n' "$1" > "$REPO/.github/security-
   docs '"handbook/**"'
   run bash "$SCRIPT" "$REPO"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"docs_paths=handbook/**"* ]]
+  [[ "$output" == *"docs_paths=handbook/**"* ]] || return 1
 }
 
 @test "tipos errados falham" {
@@ -170,7 +170,7 @@ semgrep:
   extra_configs: ["p/python"]
 EOT
   run bash "$SCRIPT" "$REPO"
-  if [ "$status" -eq 0 ]; then [[ "$output" == *"docs_paths=handbook/**"* ]]; else [ "$status" -eq 2 ]; fi
+  if [ "$status" -eq 0 ]; then [[ "$output" == *"docs_paths=handbook/**"* ]] || return 1; else [ "$status" -eq 2 ]; fi
   cat > "$REPO/.github/security-checks.yml" <<'EOT'
 version: 1
 docs_paths: ["handbook/**"]
@@ -214,7 +214,7 @@ EOT
   printf 'version: 1\nlicense:\n  extra_allowed: ["CC-BY-4.0", "LicenseRef-Bull-1", "GPL-2.0+"]\n' > "$REPO/.github/security-checks.yml"
   run bash "$SCRIPT" "$REPO"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"license_extra=CC-BY-4.0;LicenseRef-Bull-1;GPL-2.0+"* ]]
+  [[ "$output" == *"license_extra=CC-BY-4.0;LicenseRef-Bull-1;GPL-2.0+"* ]] || return 1
 }
 
 @test "skip duplicado é deduplicado" {
@@ -227,7 +227,7 @@ skip:
 EOT
   run bash "$SCRIPT" "$REPO"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"skip=license,trivy"* ]]
+  [[ "$output" == *"skip=license,trivy"* ]] || return 1
 }
 
 @test "arquivo symlink falha" {
@@ -245,7 +245,7 @@ EOT
   d="$(mktemp -d)"; mkdir "$d/.github"; printf 'version: 1\n' > "$d/.github/security-checks.yml"
   run bash "$SCRIPT" "$d"; rm -rf "$d"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"config_present=true"* ]]
+  [[ "$output" == *"config_present=true"* ]] || return 1
 }
 
 @test "docs_paths só aceita dir/** (segmentos literais + **)" {
