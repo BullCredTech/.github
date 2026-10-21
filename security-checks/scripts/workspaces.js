@@ -6,10 +6,8 @@
 //   declared <dir>              -> true|false: o package.json de <dir> declara workspaces?
 //   npmdirs  <dir>  (stdin)     -> diretórios (absolutos) a partir do JSON de `npm query .workspace`
 //   yarndirs <dir>  (stdin)     -> idem, a partir da saída de `yarn workspaces info --json` (v1)
-//   ids   <dir> [ws-dir...]     -> "name@version;..." do <dir> e dos workspaces
-//   union <dir> [ws-dir...]     -> package.json sintético com as deps de produção do <dir> e dos
-//                                  workspaces, sem os pacotes do próprio repo (o license-checker só lê
-//                                  as deps do package.json inicial)
+//   hasdeps <dir>...            -> true|false: algum desses package.json declara dependencies/optionalDependencies?
+
 'use strict';
 const fs = require('fs');
 const path = require('path');
@@ -47,8 +45,8 @@ function pegaJson(txt, abre, fecha) {
 
 function main() {
   const [modo, raiz, ...resto] = process.argv.slice(2);
-  if (!['declared', 'npmdirs', 'yarndirs', 'ids', 'union'].includes(modo) || !raiz) {
-    falha('uso: workspaces.js declared|npmdirs|yarndirs|ids|union <dir> [ws-dir...]');
+  if (!['declared', 'npmdirs', 'yarndirs', 'hasdeps'].includes(modo) || !raiz) {
+    falha('uso: workspaces.js declared|npmdirs|yarndirs|hasdeps <dir>...');
   }
   if (modo === 'declared') {
     console.log(declarados(lerPkg(raiz), path.join(raiz, 'package.json')) ? 'true' : 'false');
@@ -68,17 +66,10 @@ function main() {
       console.log(path.join(raiz, obj[k].location));
     });
   } else {
-    const pkgs = [raiz, ...resto].map(lerPkg);
-    if (modo === 'ids') {
-      console.log(pkgs.filter((p) => p.name).map((p) => (p.version ? `${p.name}@${p.version}` : p.name)).join(';'));
-    } else {
-      const proprios = new Set(pkgs.map((p) => p.name));
-      const deps = {};
-      pkgs.forEach((p) => Object.assign(deps, p.dependencies || {}, p.optionalDependencies || {}));
-      proprios.forEach((n) => delete deps[n]);
-      const base = pkgs[0];
-      console.log(JSON.stringify({ name: base.name || 'org-workspace-root', version: base.version || '0.0.0', private: true, dependencies: deps }));
-    }
+    const algum = [raiz, ...resto].map(lerPkg).some((p) => (
+      (p.dependencies && Object.keys(p.dependencies).length > 0)
+      || (p.optionalDependencies && Object.keys(p.optionalDependencies).length > 0)));
+    console.log(algum ? 'true' : 'false');
   }
 }
 

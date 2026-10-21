@@ -47,8 +47,6 @@ shim() { printf '#!/bin/sh\n%s\n' "$2" > "$SHIMS/$1"; chmod +x "$SHIMS/$1"; }
 mkpkg() { mkdir -p "$REPO/$1"; printf '{"name":"%s","version":"%s"}' "$2" "$3" > "$REPO/$1/package.json"; }
 # npm falso: ci ok; query imprime o conteúdo de $SHIMS/query.json
 shim_npm() { shim npm 'case "$1" in query) cat "'"$SHIMS"'/query.json" ;; *) exit 0 ;; esac'; }
-# npx falso: guarda os argumentos em $SHIMS/npx.args e sai com o código dado
-shim_npx() { shim npx 'echo "$@" > "'"$SHIMS"'/npx.args"; exit '"$1"; }
 node_proj() { # $1 = dir relativo; cria package.json + lockfile
   mkdir -p "$REPO/$1"; printf '{"name":"p","version":"1.0.0"}' > "$REPO/$1/package.json"; echo '{}' > "$REPO/$1/package-lock.json"
 }
@@ -78,7 +76,7 @@ ws_root() { # raiz com workspaces packages/*, um workspace "a" sem lockfile
 }
 
 @test "npmdirs e yarndirs leem a resposta do gerenciador" {
-  run bash -c "echo '[{\"path\":\"$REPO/packages/a\"},{\"location\":\"packages/b\",\"path\":\"$REPO/packages/b\"}]' | node '$WS' npmdirs '$REPO'"
+  run bash -c "echo '[{\"path\":\"$REPO/packages/a\"},{\"location\":\"packages/b\",\"path\":\"/mangled\"}]' | node '$WS' npmdirs '$REPO'"
   [ "$status" -eq 0 ]; [ "$output" = "$REPO/packages/a"$'\n'"$REPO/packages/b" ]
   run bash -c "printf 'yarn workspaces v1.22.22\n{\"a\":{\"location\":\"packages/a\"}}\nDone in 0.01s.\n' | node '$WS' yarndirs '$REPO'"
   [ "$status" -eq 0 ]; [ "$output" = "$REPO/packages/a" ]
@@ -86,58 +84,165 @@ ws_root() { # raiz com workspaces packages/*, um workspace "a" sem lockfile
   run bash -c "echo 'lixo' | node '$WS' yarndirs '$REPO'"; [ "$status" -eq 1 ]
 }
 
-@test "ids e union com os diretórios informados" {
-  printf '{"name":"root","version":"1.0.0","private":true,"workspaces":["packages/*"],"dependencies":{"left-pad":"1","a":"1.0.0"},"devDependencies":{"typescript":"5"}}' > "$REPO/package.json"
-  mkdir -p "$REPO/packages/a" "$REPO/packages/b"
-  printf '{"name":"a","version":"1.0.0","dependencies":{"pg":"8","b":"1.0.0"},"devDependencies":{"jest":"1"}}' > "$REPO/packages/a/package.json"
-  printf '{"name":"b","version":"1.0.0","dependencies":{"fastify":"5"},"optionalDependencies":{"fsevents":"2"}}' > "$REPO/packages/b/package.json"
-  run node "$WS" ids "$REPO" "$REPO/packages/a" "$REPO/packages/b"
-  [ "$output" = "root@1.0.0;a@1.0.0;b@1.0.0" ]
-  run node "$WS" union "$REPO" "$REPO/packages/a" "$REPO/packages/b"
+@test "hasdeps: dependencies/optionalDependencies, e falha com JSON inválido" {
+  printf '{"name":"x"}' > "$REPO/package.json"; run node "$WS" hasdeps "$REPO"; [ "$output" = false ]
+  printf '{"dependencies":{}}' > "$REPO/package.json"; run node "$WS" hasdeps "$REPO"; [ "$output" = false ]
+  printf '{"dependencies":{"a":"1"}}' > "$REPO/package.json"; run node "$WS" hasdeps "$REPO"; [ "$output" = true ]
+  printf '{"optionalDependencies":{"a":"1"}}' > "$REPO/package.json"; run node "$WS" hasdeps "$REPO"; [ "$output" = true ]
+  printf '{"devDependencies":{"a":"1"}}' > "$REPO/package.json"; run node "$WS" hasdeps "$REPO"; [ "$output" = false ]
+  printf 'quebrado' > "$REPO/package.json"; run node "$WS" hasdeps "$REPO"; [ "$status" -eq 1 ]
+}
+
+# ---------- npmwalk (sem rede: node_modules montado à mão) ----------
+LIC="$BATS_TEST_DIRNAME/../scripts/licenses.py"
+nm() { mkdir -p "$1"; printf '{"name":"%s","version":"%s"%s}' "$2" "$3" "$4" > "$1/package.json"; }
+walk_fixture() {
+  OUT="$(mktemp -d)"
+  printf '{"name":"root","version":"1.0.0","workspaces":["packages/*"],"dependencies":{"a":"1"}}' > "$REPO/package.json"
+  N="$REPO/node_modules"
+  nm "$N/a" a 1.0.0 ',"license":"MIT"'
+  nm "$N/@s/b" @s/b 1.0.0 ',"license":"Apache-2.0"'
+  nm "$N/c" c 1.0.0 ',"licenses":[{"type":"MIT"},{"type":"BSD-3-Clause"}]'
+  nm "$N/d" d 1.0.0 ',"license":{"type":"ISC"}'
+  nm "$N/e" e 1.0.0 ''
+  nm "$N/p" p 1.0.0 ',"private":true'
+  nm "$N/a/node_modules/is-odd" is-odd 2.0.0 ',"license":"GPL-3.0"'
+  nm "$REPO/packages/w" w 1.0.0 ',"license":"UNLICENSED"'
+  ln -s ../packages/w "$N/w"
+  nm "$REPO/packages/w/node_modules/wdep" wdep 1.0.0 ',"license":"MIT"'
+  nm "$OUT/pkg" out-pkg 1.0.0 ',"license":"AGPL-3.0"'
+  ln -s "$OUT/pkg" "$N/out-pkg"
+  mkdir -p "$N/.bin" "$N/.cache/x"; echo '{}' > "$N/.package-lock.json"; echo '{"name":"lixo"}' > "$N/.cache/x/package.json"
+}
+
+@test "npmwalk: percorre aninhados, escopo, licenses legado, objeto, sem licença; pula workspace e raiz" {
+  walk_fixture
+  run bash "$SCRIPT" npmwalk "$REPO"
+  rm -rf "$OUT"
   [ "$status" -eq 0 ]
-  echo "$output" | node -e '
-    const p = JSON.parse(require("fs").readFileSync(0, "utf8"));
-    const d = Object.keys(p.dependencies).sort().join(",");
-    if (d !== "fastify,fsevents,left-pad,pg") { console.error("deps: " + d); process.exit(1); }
-    if (p.devDependencies || p.workspaces || p.name !== "root" || p.private !== true) process.exit(2);'
-  run node "$WS" union "$REPO" "$REPO/packages/naoexiste"
+  [[ "$output" == *'"Name":"is-odd","Version":"2.0.0","License":"GPL-3.0"'* ]]
+  [[ "$output" == *'"Name":"@s/b"'* ]]
+  [[ "$output" == *'"License":"MIT OR BSD-3-Clause"'* ]]
+  [[ "$output" == *'"Name":"d","Version":"1.0.0","License":"ISC"'* ]]
+  [[ "$output" == *'"Name":"e","Version":"1.0.0","License":""'* ]]
+  [[ "$output" == *'"Name":"p"'* ]]
+  [[ "$output" == *'"Name":"wdep"'* ]]
+  [[ "$output" == *'"Name":"out-pkg"'* ]]
+  [[ "$output" != *'"Name":"w"'* ]]
+  [[ "$output" != *'"Name":"root"'* ]]
+  [[ "$output" != *'lixo'* ]]
+}
+
+@test "npmwalk + licenses.py npm: GPL aninhado e symlink para fora reprovam; sem licença só avisa" {
+  walk_fixture
+  bash "$SCRIPT" npmwalk "$REPO" > "$REPO/inv.json"
+  run python3 "$LIC" npm --allow "MIT;Apache-2.0;BSD-3-Clause;ISC" < "$REPO/inv.json"
   [ "$status" -eq 1 ]
+  [[ "$output" == *"is-odd"* ]]; [[ "$output" == *"out-pkg"* ]]
+  [[ "$output" == *"sem licença declarada"* ]]
+  rm -rf "$REPO/node_modules/a/node_modules/is-odd" "$REPO/node_modules/out-pkg"
+  bash "$SCRIPT" npmwalk "$REPO" > "$REPO/inv.json"
+  run python3 "$LIC" npm --allow "MIT;Apache-2.0;BSD-3-Clause;ISC" < "$REPO/inv.json"
+  rm -rf "$OUT"
+  [ "$status" -eq 0 ]
+}
+
+@test "npmwalk: falha fechado com symlink quebrado, pacote sem json, workspace ausente e minimo" {
+  walk_fixture
+  ln -s /caminho/que/nao/existe "$REPO/node_modules/quebrado"
+  run bash "$SCRIPT" npmwalk "$REPO"; [ "$status" -eq 1 ]
+  rm "$REPO/node_modules/quebrado"
+  mkdir -p "$REPO/node_modules/semjson"
+  run bash "$SCRIPT" npmwalk "$REPO"; [ "$status" -eq 1 ]
+  rmdir "$REPO/node_modules/semjson"
+  run node "$BATS_TEST_DIRNAME/../scripts/npmwalk.js" "$REPO" --expect "$REPO/packages/naoligado"; [ "$status" -eq 1 ]
+  mkdir -p "$REPO/packages/semlink"
+  run node "$BATS_TEST_DIRNAME/../scripts/npmwalk.js" "$REPO" --expect "$REPO/packages/semlink"; [ "$status" -eq 1 ]
+  run node "$BATS_TEST_DIRNAME/../scripts/npmwalk.js" "$REPO" --expect "$REPO/packages/w"; [ "$status" -eq 0 ]
+  rm -rf "$OUT" "$REPO/node_modules"
+  run node "$BATS_TEST_DIRNAME/../scripts/npmwalk.js" "$REPO" --min 1; [ "$status" -eq 1 ]
+  run node "$BATS_TEST_DIRNAME/../scripts/npmwalk.js" "$REPO"; [ "$status" -eq 0 ]; [ "$output" = "[]" ]
 }
 
 # ---------- npm/yarn: falha fechado ----------
 @test "node: shim do node que falha reprova" {
-  node_proj app; shim node 'exit 1'; shim_npm; shim_npx 0
+  node_proj app; shim node 'exit 1'; shim_npm
   PATH="$SHIMS:$PATH" run bash "$SCRIPT" check "$REPO" "$ALLOW" ""
   [ "$status" -ne 0 ]; [[ "$output" == *"❌"* ]]
 }
 
-@test "node: shim do npx que falha reprova" {
-  node_proj app; shim_npm; shim_npx 1
+@test "node: npm ci que falha reprova" {
+  node_proj app; shim npm 'exit 1'
   PATH="$SHIMS:$PATH" run bash "$SCRIPT" check "$REPO" "$ALLOW" ""
   [ "$status" -ne 0 ]; [[ "$output" == *"❌"* ]]
 }
 
-@test "node: npx ok aprova" {
-  node_proj app; shim_npm; shim_npx 0
+@test "node: instalado e tudo permitido aprova; GPL aninhado reprova" {
+  node_proj app; shim_npm
+  printf '{"name":"p","version":"1.0.0","dependencies":{"a":"1"}}' > "$REPO/app/package.json"
+  nm "$REPO/app/node_modules/a" a 1.0.0 ',"license":"MIT"'
   PATH="$SHIMS:$PATH" run bash "$SCRIPT" check "$REPO" "$ALLOW" ""
   [ "$status" -eq 0 ]; [[ "$output" == *"✅"* ]]
+  nm "$REPO/app/node_modules/a/node_modules/is-odd" is-odd 2.0.0 ',"license":"GPL-3.0"'
+  PATH="$SHIMS:$PATH" run bash "$SCRIPT" check "$REPO" "$ALLOW" ""
+  [ "$status" -ne 0 ]; [[ "$output" == *"is-odd"* ]]
+}
+
+@test "node: declara dependências mas nada foi instalado reprova; sem dependências passa" {
+  node_proj app; shim_npm
+  printf '{"name":"p","version":"1.0.0","dependencies":{"a":"1"}}' > "$REPO/app/package.json"
+  PATH="$SHIMS:$PATH" run bash "$SCRIPT" check "$REPO" "$ALLOW" ""
+  [ "$status" -ne 0 ]
+  printf '{"name":"p","version":"1.0.0"}' > "$REPO/app/package.json"
+  PATH="$SHIMS:$PATH" run bash "$SCRIPT" check "$REPO" "$ALLOW" ""
+  [ "$status" -eq 0 ]
+}
+
+@test "node: package.json com dependências e sem lockfile reprova; sem dependências é ok" {
+  mkdir -p "$REPO/x" "$REPO/y"
+  printf '{"name":"y"}' > "$REPO/y/package.json"
+  run bash "$SCRIPT" check "$REPO" "$ALLOW" ""
+  [ "$status" -eq 0 ]
+  printf '{"name":"x","dependencies":{"a":"1"}}' > "$REPO/x/package.json"
+  run bash "$SCRIPT" check "$REPO" "$ALLOW" ""
+  [ "$status" -ne 0 ]; [[ "$output" == *"sem lockfile: dependências não verificáveis"* ]]
+}
+
+@test "pnpm não é suportado: reprova" {
+  mkdir -p "$REPO/x"; printf '{"name":"x"}' > "$REPO/x/package.json"; echo 'lockfileVersion: 9' > "$REPO/x/pnpm-lock.yaml"
+  run bash "$SCRIPT" check "$REPO" "$ALLOW" ""
+  [ "$status" -ne 0 ]; [[ "$output" == *"pnpm não suportado"* ]]
+}
+
+@test "node: package.json inválido reprova" {
+  mkdir -p "$REPO/x"; printf '{quebrado' > "$REPO/x/package.json"; echo '{}' > "$REPO/x/package-lock.json"
+  shim_npm
+  PATH="$SHIMS:$PATH" run bash "$SCRIPT" check "$REPO" "$ALLOW" ""
+  [ "$status" -ne 0 ]
+}
+
+@test "node: workspaces malformado reprova" {
+  mkdir -p "$REPO/x"; printf '{"name":"x","workspaces":5}' > "$REPO/x/package.json"; echo '{}' > "$REPO/x/package-lock.json"
+  shim_npm
+  PATH="$SHIMS:$PATH" run bash "$SCRIPT" check "$REPO" "$ALLOW" ""
+  [ "$status" -ne 0 ]
 }
 
 @test "workspaces: raiz declara mas o npm não retorna nenhum => reprova" {
-  ws_root; shim_npm; echo '[]' > "$SHIMS/query.json"; shim_npx 0
+  ws_root; shim_npm; echo '[]' > "$SHIMS/query.json"
   PATH="$SHIMS:$PATH" run bash "$SCRIPT" check "$REPO" "$ALLOW" ""
   [ "$status" -ne 0 ]; [[ "$output" == *"workspaces"* ]]
 }
 
 @test "workspaces: npm query que falha reprova" {
-  ws_root; shim npm 'case "$1" in query) exit 1 ;; *) exit 0 ;; esac'; shim_npx 0
+  ws_root; shim npm 'case "$1" in query) exit 1 ;; *) exit 0 ;; esac'
   PATH="$SHIMS:$PATH" run bash "$SCRIPT" check "$REPO" "$ALLOW" ""
   [ "$status" -ne 0 ]
 }
 
 @test "workspaces: diretório fora da raiz reprova" {
   ws_root; out="$(mktemp -d)"; printf '{"name":"z","version":"1.0.0"}' > "$out/package.json"
-  shim_npm; printf '[{"path":"%s"}]' "$out" > "$SHIMS/query.json"; shim_npx 0
+  shim_npm; printf '[{"path":"%s"}]' "$out" > "$SHIMS/query.json"
   PATH="$SHIMS:$PATH" run bash "$SCRIPT" check "$REPO" "$ALLOW" ""
   rm -rf "$out"
   [ "$status" -ne 0 ]; [[ "$output" == *"fora da raiz"* ]]
@@ -146,49 +251,32 @@ ws_root() { # raiz com workspaces packages/*, um workspace "a" sem lockfile
 @test "workspaces: symlink que escapa da raiz reprova" {
   ws_root; out="$(mktemp -d)"; printf '{"name":"z","version":"1.0.0"}' > "$out/package.json"
   rm -rf "$REPO/packages/a"; ln -s "$out" "$REPO/packages/a"
-  shim_npm; printf '[{"path":"%s/packages/a"}]' "$REPO" > "$SHIMS/query.json"; shim_npx 0
+  shim_npm; printf '[{"location":"packages/a"}]' > "$SHIMS/query.json"
   PATH="$SHIMS:$PATH" run bash "$SCRIPT" check "$REPO" "$ALLOW" ""
   rm -rf "$out"
   [ "$status" -ne 0 ]; [[ "$output" == *"fora da raiz"* ]]
 }
 
-@test "workspaces: ok => checa a raiz, exclui os pacotes do repo, restaura o package.json e não avisa lockfile" {
-  ws_root; cp "$REPO/package.json" "$SHIMS/orig.json"
-  shim_npm; printf '[{"path":"%s/packages/a"}]' "$REPO" > "$SHIMS/query.json"; shim_npx 0
+@test "workspaces: declarado mas não instalado em node_modules reprova" {
+  ws_root; shim_npm; printf '[{"location":"packages/a"}]' > "$SHIMS/query.json"
+  nm "$REPO/node_modules/x" x 1.0.0 ',"license":"MIT"'
+  PATH="$SHIMS:$PATH" run bash "$SCRIPT" check "$REPO" "$ALLOW" ""
+  [ "$status" -ne 0 ]; [[ "$output" == *"workspace não instalado"* ]]
+}
+
+@test "workspaces: instalado => aprova, não avisa do workspace sem lockfile; dep não içada do workspace é checada" {
+  ws_root; shim_npm; printf '[{"location":"packages/a"}]' > "$SHIMS/query.json"
+  nm "$REPO/node_modules/x" x 1.0.0 ',"license":"MIT"'
+  ln -s ../packages/a "$REPO/node_modules/a"
+  nm "$REPO/packages/a/node_modules/y" y 1.0.0 ',"license":"MIT"'
   PATH="$SHIMS:$PATH" run bash "$SCRIPT" check "$REPO" "$ALLOW" ""
   [ "$status" -eq 0 ]
   [[ "$output" == *"1 workspaces"* ]]
+  [[ "$output" == *"2 pacotes inventariados"* ]]
   [[ "$output" != *"sem lockfile"* ]]
-  cmp "$REPO/package.json" "$SHIMS/orig.json"
-  grep -q -- '--excludePackages root@1.0.0;a@2.0.0' "$SHIMS/npx.args"
-}
-
-@test "workspaces: npx que falha reprova e restaura o package.json" {
-  ws_root; cp "$REPO/package.json" "$SHIMS/orig.json"
-  shim_npm; printf '[{"path":"%s/packages/a"}]' "$REPO" > "$SHIMS/query.json"; shim_npx 1
+  nm "$REPO/packages/a/node_modules/y" y 1.0.0 ',"license":"AGPL-3.0"'
   PATH="$SHIMS:$PATH" run bash "$SCRIPT" check "$REPO" "$ALLOW" ""
-  [ "$status" -ne 0 ]
-  cmp "$REPO/package.json" "$SHIMS/orig.json"
-}
-
-@test "node: package.json sem lockfile fora de workspace mantém o aviso" {
-  mkdir -p "$REPO/x"; printf '{"name":"x"}' > "$REPO/x/package.json"
-  run bash "$SCRIPT" check "$REPO" "$ALLOW" ""
-  [ "$status" -eq 0 ]; [[ "$output" == *"sem lockfile"* ]]
-}
-
-@test "node: package.json inválido reprova" {
-  mkdir -p "$REPO/x"; printf '{quebrado' > "$REPO/x/package.json"; echo '{}' > "$REPO/x/package-lock.json"
-  shim_npm; shim_npx 0
-  PATH="$SHIMS:$PATH" run bash "$SCRIPT" check "$REPO" "$ALLOW" ""
-  [ "$status" -ne 0 ]
-}
-
-@test "node: workspaces malformado reprova" {
-  mkdir -p "$REPO/x"; printf '{"name":"x","workspaces":5}' > "$REPO/x/package.json"; echo '{}' > "$REPO/x/package-lock.json"
-  shim_npm; shim_npx 0
-  PATH="$SHIMS:$PATH" run bash "$SCRIPT" check "$REPO" "$ALLOW" ""
-  [ "$status" -ne 0 ]
+  [ "$status" -ne 0 ]; [[ "$output" == *"AGPL"* ]]
 }
 
 @test "achar: subprojeto em build/ e dist/ não fica escondido" {
@@ -236,7 +324,8 @@ ws_root() { # raiz com workspaces packages/*, um workspace "a" sem lockfile
 
 @test "python: opções e URLs perigosas em requirements são recusadas" {
   mkdir -p "$REPO/svc"
-  for l in '-e .' '--editable ./x' '--index-url https://evil.example/simple' '--extra-index-url https://evil.example' '-i https://evil.example' '--find-links https://evil.example' '-f /tmp/x' 'pkg @ https://evil.example/p.whl' 'git+https://github.com/x/y.git#egg=y' 'pkg @ file:///tmp/p.whl' 'http://evil.example/p.tar.gz'; do
+  for l in '-e .' '--editable ./x' '--index-url https://evil.example/simple' '--extra-index-url https://evil.example' '-i https://evil.example' '--find-links https://evil.example' '-f /tmp/x' 'pkg @ https://evil.example/p.whl' 'git+https://github.com/x/y.git#egg=y' 'pkg @ file:///tmp/p.whl' 'http://evil.example/p.tar.gz' 'six @ GIT+HTTPS://x/y' 'six @ HTTPS://x/y.zip' 'six @ ${GITHUB_SERVER_URL}/x' 'six @ ./local.whl' '--pre' '--no-binary :all:' '--only-binary :none:' '--config-settings x=y' './local.whl' 'local.whl' 'pkg ; python_version >= "3" and x @ y' '-r../outside/o.txt' '-r ../outside/o.txt' '-r=../outside/o.txt' '--requirement=../outside/o.txt' '-c ../outside/o.txt' '--constraint ../outside/o.txt' 'pkg==%s'; do
+    mkdir -p "$REPO/outside"; echo requests > "$REPO/outside/o.txt"
     printf '# comentario\nrequests\n%s\n' "$l" > "$REPO/svc/requirements.txt"
     run bash "$SCRIPT" check "$REPO" "$ALLOW" ""
     [ "$status" -ne 0 ] || { echo "passou: $l"; return 1; }
@@ -257,4 +346,76 @@ ws_root() { # raiz com workspaces packages/*, um workspace "a" sem lockfile
   shim go 'echo "boom go" >&2; exit 1'
   GITHUB_STEP_SUMMARY="$SHIMS/summary" PATH="$SHIMS:$PATH" run bash "$SCRIPT" check "$REPO" "$ALLOW" ""
   [ "$status" -ne 0 ]; grep -q 'boom go' "$SHIMS/summary"
+}
+
+@test "pyreq: linhas válidas são aceitas (specifiers, extras, marcadores, hashes com continuação, includes)" {
+  mkdir -p "$REPO/svc"
+  printf 'Django>=4.2,<5\nrequests[security]==2.31.0 ; python_version >= "3.8"\nsix\n# c\n\n-rother.txt\n' > "$REPO/svc/requirements.txt"
+  printf 'flask==3.0.0 \\\n    --hash=sha256:abc123 \\\n    --hash=sha256:def456\n--hash=sha256:solta\n' > "$REPO/svc/other.txt"
+  run bash "$SCRIPT" pyreq "$REPO/svc" "$REPO/svc/requirements.txt"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"django>=4.2,<5"* ]]
+  [[ "$output" == *'requests[security]==2.31.0 ; python_version >= "3.8"'* ]]
+  [[ "$output" == *"flask==3.0.0"* ]]
+  [[ "$output" == *"six"* ]]
+}
+
+@test "pyreq: -rother.txt dentro do projeto é seguido (e o conteúdo dele é conferido); ciclo não trava" {
+  mkdir -p "$REPO/svc"
+  printf -- '-rother.txt\n' > "$REPO/svc/requirements.txt"
+  printf 'six\n-r requirements.txt\n--pre\n' > "$REPO/svc/other.txt"
+  run bash "$SCRIPT" pyreq "$REPO/svc" "$REPO/svc/requirements.txt"
+  [ "$status" -ne 0 ]; [[ "$output" == *"--pre"* ]]
+  printf 'six\n-r requirements.txt\n' > "$REPO/svc/other.txt"
+  run bash "$SCRIPT" pyreq "$REPO/svc" "$REPO/svc/requirements.txt"
+  [ "$status" -eq 0 ]
+}
+
+@test "python: layout requirements/ aplica o filtro de dev/test pelo nome base" {
+  for n in dev.txt test.txt lint.txt docs.txt requirements-dev.txt; do
+    run bash "$SCRIPT" pyfiltro "$n" dir; [ "$output" = skip ] || { echo "devia pular: $n"; return 1; }
+  done
+  for n in base.txt prod.txt production.txt common.txt; do
+    run bash "$SCRIPT" pyfiltro "$n" dir; [ "$output" = install ] || { echo "devia instalar: $n"; return 1; }
+  done
+  run bash "$SCRIPT" pyfiltro dev.txt; [ "$output" = install ]   # fora de requirements/ não vale
+}
+
+@test "python: requirements/dev.txt sozinho não instala nada; requirements/base.txt é instalado" {
+  mkdir -p "$REPO/svc/requirements"
+  echo "pacote-que-nao-existe-org-security-xyz==0.0.1" > "$REPO/svc/requirements/dev.txt"
+  run bash "$SCRIPT" check "$REPO" "$ALLOW" ""
+  [ "$status" -eq 0 ]
+  echo "pacote-que-nao-existe-org-security-xyz==0.0.1" > "$REPO/svc/requirements/base.txt"
+  run bash "$SCRIPT" check "$REPO" "$ALLOW" ""
+  [ "$status" -ne 0 ]; [[ "$output" == *"❌"* ]]
+}
+
+@test "python: Pipfile sem pyproject reprova (pipenv não suportado)" {
+  mkdir -p "$REPO/svc"; printf '[packages]\nrequests = "*"\n' > "$REPO/svc/Pipfile"
+  run bash "$SCRIPT" check "$REPO" "$ALLOW" ""
+  [ "$status" -ne 0 ]; [[ "$output" == *"pipenv não suportado"* ]]
+}
+
+@test "python: setup.py sem pyproject é projeto Python (instala com pip install .)" {
+  mkdir -p "$REPO/svc"
+  printf 'from setuptools import setup\nsetup(name="x", version="0.1", install_requires=["pacote-que-nao-existe-org-security-xyz==0.0.1"])\n' > "$REPO/svc/setup.py"
+  run bash "$SCRIPT" check "$REPO" "$ALLOW" ""
+  [ "$status" -ne 0 ]; [[ "$output" == *"❌ licença"* ]]
+}
+
+@test "detect: setup.py, setup.cfg com [metadata], Pipfile e requirements/ contam como python" {
+  mkdir -p "$REPO/a" "$REPO/b" "$REPO/c" "$REPO/d/requirements" "$REPO/e"
+  echo 'x' > "$REPO/a/setup.py"; run bash "$SCRIPT" detect "$REPO"; [[ "$output" == *"python=true"* ]]; rm "$REPO/a/setup.py"
+  printf '[metadata]\nname=x\n' > "$REPO/b/setup.cfg"; run bash "$SCRIPT" detect "$REPO"; [[ "$output" == *"python=true"* ]]; rm "$REPO/b/setup.cfg"
+  printf '[flake8]\nmax-line-length=100\n' > "$REPO/e/setup.cfg"; run bash "$SCRIPT" detect "$REPO"; [[ "$output" == *"python=false"* ]]
+  echo 'x' > "$REPO/c/Pipfile"; run bash "$SCRIPT" detect "$REPO"; [[ "$output" == *"python=true"* ]]; rm "$REPO/c/Pipfile"
+  echo 'six' > "$REPO/d/requirements/base.txt"; run bash "$SCRIPT" detect "$REPO"; [[ "$output" == *"python=true"* ]]
+}
+
+@test "go: GOTOOLCHAIN=local e GOWORK=off são usados" {
+  mkdir -p "$REPO/svc"; echo 'module m' > "$REPO/svc/go.mod"
+  shim go 'echo "TC=$GOTOOLCHAIN WORK=$GOWORK" >&2; exit 1'
+  GITHUB_STEP_SUMMARY="$SHIMS/summary" PATH="$SHIMS:$PATH" run bash "$SCRIPT" check "$REPO" "$ALLOW" ""
+  [ "$status" -ne 0 ]; [[ "$output" == *"TC=local WORK=off"* ]]
 }

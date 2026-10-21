@@ -20,6 +20,7 @@ LICENSE na raiz do pacote, daí a detecção por marcador textual.
 
 Uso:
   licenses.py pip  --allow "MIT;Apache-2.0" < saida-do-pip-licenses.json
+  licenses.py npm  --allow "MIT;Apache-2.0" < saida-do-npmwalk.json   (mesmo formato)
   licenses.py dart --allow "MIT;Apache-2.0" <diretorio-do-projeto>
 Saída: 0 se tudo permitido; 1 se há licença fora da lista. Licença vazia/UNKNOWN
 só avisa ("sem licença declarada").
@@ -195,19 +196,19 @@ def avaliar(pacotes, permitidas):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
-    ap.add_argument('modo', choices=['pip', 'dart'])
+    ap.add_argument('modo', choices=['pip', 'npm', 'dart'])
     ap.add_argument('--allow', required=True, help='SPDX separados por ";"')
     ap.add_argument('diretorio', nargs='?', default='.')
     args = ap.parse_args(argv)
 
     permitidas = permitidas_normalizadas(args.allow)
-    if args.modo == 'pip':
+    if args.modo in ('pip', 'npm'):
         try:
             pacotes = inventario_pip(sys.stdin.read())
         except ValueError as e:  # JSONDecodeError é ValueError
-            print(f'entrada inválida do pip-licenses: {e}', file=sys.stderr)
+            print(f'entrada inválida do inventário ({args.modo}): {e}', file=sys.stderr)
             return 2
-        origem = 'pip-licenses'
+        origem = 'pip-licenses' if args.modo == 'pip' else 'node_modules'
     else:
         pacotes = inventario_dart(args.diretorio)
         origem = args.diretorio
