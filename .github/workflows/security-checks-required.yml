@@ -6,8 +6,10 @@ name: org-security
 # Regras deste arquivo:
 #  - todo `run:` recebe valores dinâmicos só por `env:` (nunca expressão dentro do script);
 #  - toda `uses:` fica fixada por SHA;
-#  - o arquivo de exceções .github/security-checks.yml é lido da branch de DESTINO (BASE_SHA),
-#    para que um PR não afrouxe os próprios checks.
+#  - o arquivo de exceções .github/security-checks.yml e os arquivos de configuração/ignore das
+#    ferramentas (.gitleaks.toml, .gitleaksignore, .semgrepignore, .semgrep.yml, .trivyignore, trivy.yaml)
+#    são lidos da branch de DESTINO (BASE_SHA), nunca do PR: um PR não afrouxa os próprios checks.
+#    A mudança nesses arquivos passa a valer depois do merge, revisada pelo CODEOWNERS.
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
@@ -68,6 +70,11 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with: { fetch-depth: 0, persist-credentials: false }
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with: { repository: BullCredTech/.github, ref: '${{ github.workflow_sha }}', path: .org-security, persist-credentials: false }
+      # Configs/ignores das ferramentas vêm da base: o PR não relaxa os próprios checks (vale após o merge, via CODEOWNERS).
+      - name: Restaurar configs das ferramentas da branch de destino
+        run: bash .org-security/security-checks/scripts/base-configs.sh "$BASE_SHA"
       - name: Instalar gitleaks 8.30.1 (checksum conferido)
         run: |
           set -euo pipefail
@@ -102,14 +109,22 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         if: needs.prepare.outputs.config_ok == 'true' && needs.prepare.outputs.docs_only != 'true' && !contains(needs.prepare.outputs.skip, 'semgrep')
         with: { fetch-depth: 0 }
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        if: needs.prepare.outputs.config_ok == 'true' && needs.prepare.outputs.docs_only != 'true' && !contains(needs.prepare.outputs.skip, 'semgrep')
+        with: { repository: BullCredTech/.github, ref: '${{ github.workflow_sha }}', path: .org-security, persist-credentials: false }
+      # Configs/ignores das ferramentas vêm da base: o PR não relaxa os próprios checks (vale após o merge, via CODEOWNERS).
+      - name: Restaurar configs das ferramentas da branch de destino
+        if: needs.prepare.outputs.config_ok == 'true' && needs.prepare.outputs.docs_only != 'true' && !contains(needs.prepare.outputs.skip, 'semgrep')
+        run: bash .org-security/security-checks/scripts/base-configs.sh "$BASE_SHA"
       - name: semgrep ci
         if: needs.prepare.outputs.config_ok == 'true' && needs.prepare.outputs.docs_only != 'true' && !contains(needs.prepare.outputs.skip, 'semgrep')
         uses: docker://semgrep/semgrep@sha256:9349edbadf90c3f3c0c3f55867625354e89680e6fa10d9034042af52fdb0e0d0
         env:
           SEMGREP_BASELINE_REF: ${{ env.BASE_SHA }}
         with:
-          # semgrep_extra já vem validado pelo config.sh (só `--config p/...` ou `--config r/...`)
-          args: semgrep ci --config=auto --no-suppress-errors ${{ needs.prepare.outputs.semgrep_extra }}
+          # semgrep_extra já vem validado pelo config.sh (só `--config p/...` ou `--config r/...`).
+          # --exclude: o diretório .org-security (scripts centrais) não é código do repo e não é rastreado pelo git.
+          args: semgrep ci --config=auto --no-suppress-errors --exclude=.org-security ${{ needs.prepare.outputs.semgrep_extra }}
 
   trivy:
     name: 'org-security / trivy'
@@ -128,7 +143,14 @@ jobs:
           echo "Sem scan: PR só de documentação ou skip declarado no repo." | tee -a "$GITHUB_STEP_SUMMARY"
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         if: needs.prepare.outputs.config_ok == 'true' && needs.prepare.outputs.docs_only != 'true' && !contains(needs.prepare.outputs.skip, 'trivy')
-        with: { persist-credentials: false }
+        with: { fetch-depth: 0, persist-credentials: false }
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        if: needs.prepare.outputs.config_ok == 'true' && needs.prepare.outputs.docs_only != 'true' && !contains(needs.prepare.outputs.skip, 'trivy')
+        with: { repository: BullCredTech/.github, ref: '${{ github.workflow_sha }}', path: .org-security, persist-credentials: false }
+      # Configs/ignores das ferramentas vêm da base: o PR não relaxa os próprios checks (vale após o merge, via CODEOWNERS).
+      - name: Restaurar configs das ferramentas da branch de destino
+        if: needs.prepare.outputs.config_ok == 'true' && needs.prepare.outputs.docs_only != 'true' && !contains(needs.prepare.outputs.skip, 'trivy')
+        run: bash .org-security/security-checks/scripts/base-configs.sh "$BASE_SHA"
       - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         if: needs.prepare.outputs.config_ok == 'true' && needs.prepare.outputs.docs_only != 'true' && !contains(needs.prepare.outputs.skip, 'trivy')
         with:
