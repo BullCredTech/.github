@@ -601,7 +601,7 @@ central_fixture() {
 
 @test "integridade: SHA diferente => reprova" {
   central_fixture
-  ORG_SECURITY_SHA="0000000000000000000000000000000000000001" run bash "$C/security-checks/scripts/license.sh" check "$REPO" "$ALLOW" ""
+  ORG_SECURITY_SHA="$(printf '%040d' 1)" run bash "$C/security-checks/scripts/license.sh" check "$REPO" "$ALLOW" ""
   rm -rf "$C"
   [ "$status" -ne 0 ]; [[ "$output" == *"verificador alterado durante o job"* ]] || return 1
 }

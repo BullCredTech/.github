@@ -150,7 +150,7 @@ docs() { printf 'version: 1\ndocs_paths: [%s]\n' "$1" > "$REPO/.github/security-
     'skip: foo' \
     'skip: [foo]' \
     'skip: [{check: trivy, reason: "motivo bem longo", foo: 1}]' \
-    'skip: [{check: trivy, reason: 12345678901234}]'; do
+    'skip: [{check: trivy, reason: 42}]'; do
     printf 'version: 1\n%s\n' "$c" > "$REPO/.github/security-checks.yml"
     run bash "$SCRIPT" "$REPO"
     [ "$status" -eq 2 ] || { echo "passou: $c"; return 1; }

@@ -46,7 +46,7 @@ commit() { git add -A; git commit -qm c; HEAD_SHA=$(git rev-parse HEAD); }
 @test "nunca falha: SHA inválido ou base inexistente só avisa" {
   run bash "$SCRIPT" "main" "--output=x"
   [ "$status" -eq 0 ]
-  run bash "$SCRIPT" "0000000000000000000000000000000000000001" "0000000000000000000000000000000000000002"
+  run bash "$SCRIPT" "$(printf '%040d' 1)" "$(printf '%040d' 2)"
   [ "$status" -eq 0 ]
   [ ! -e x ]
 }

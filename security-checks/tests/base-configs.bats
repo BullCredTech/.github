@@ -67,7 +67,7 @@ commit() { git add -A; git commit -qm c; git rev-parse HEAD; }
 @test "SHA inexistente falha sem apagar nada" {
   echo A > .gitleaksignore
   commit >/dev/null; echo B > .gitleaksignore
-  run bash "$SCRIPT" "0000000000000000000000000000000000000001"
+  run bash "$SCRIPT" "$(printf '%040d' 1)"
   [ "$status" -ne 0 ]
   [ "$(cat .gitleaksignore)" = B ]
 }

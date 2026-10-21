@@ -59,7 +59,7 @@ commit() { git add -A; git commit -qm c; HEAD_SHA=$(git rev-parse HEAD); }
 
 @test "base inexistente: falha (não imprime true)" {
   echo b >> docs/guia.md; commit
-  run bash "$SCRIPT" "$REPO" "0000000000000000000000000000000000000001" "$HEAD_SHA" ""
+  run bash "$SCRIPT" "$REPO" "$(printf '%040d' 1)" "$HEAD_SHA" ""
   [ "$status" -ne 0 ]
   [[ "$output" != *"docs_only=true"* ]] || return 1
 }
