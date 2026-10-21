@@ -1,0 +1,261 @@
+name: org-security
+
+# Exigido pela regra da org `org-security-checks` em PRs para a branch padrão e `production`.
+# Desenho: bull-module-devops docs/superpowers/specs/2026-10-20-org-security-checks-design.md
+#
+# Regras deste arquivo:
+#  - todo `run:` recebe valores dinâmicos só por `env:` (nunca expressão dentro do script);
+#  - toda `uses:` fica fixada por SHA;
+#  - o arquivo de exceções .github/security-checks.yml e os arquivos de configuração/ignore das
+#    ferramentas (.gitleaks.toml, .gitleaksignore, .semgrepignore, .semgrep.yml, .trivyignore, trivy.yaml)
+#    são lidos da branch de DESTINO (BASE_SHA), nunca do PR: um PR não afrouxa os próprios checks.
+#    A mudança nesses arquivos passa a valer depois do merge, revisada pelo CODEOWNERS.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+  merge_group:
+
+permissions:
+  contents: read
+
+env:
+  BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+  HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
+
+jobs:
+  prepare:
+    name: 'org-security / prepare'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      docs_only: ${{ steps.changes.outputs.docs_only }}
+      config_ok: ${{ steps.config.outputs.config_ok }}
+      license_extra: ${{ steps.config.outputs.license_extra }}
+      semgrep_extra: ${{ steps.config.outputs.semgrep_extra }}
+      skip: ${{ steps.config.outputs.skip }}
+      central_sha: ${{ steps.central.outputs.sha }}
+    steps:
+      # Onde roda o workflow central: imprime a origem (para conferir na onda -1) e só segue se o
+      # workflow vem do repo BullCredTech/.github. Sem fallback silencioso: fail-closed.
+      - id: central
+        env:
+          WF_REF: ${{ github.workflow_ref }}
+          WF_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          echo "workflow_ref=$WF_REF"
+          echo "workflow_sha=$WF_SHA"
+          case "$WF_REF" in
+            BullCredTech/.github/*) ;;
+            *) echo "::error::este workflow não está rodando a partir de BullCredTech/.github ($WF_REF); os scripts centrais não podem ser localizados"; exit 1 ;;
+          esac
+          [[ "$WF_SHA" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]] || { echo "::error::workflow_sha ausente ou inválido"; exit 1; }
+          echo "sha=$WF_SHA" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with: { fetch-depth: 0, persist-credentials: false }
+      - name: Limpar .org-security (um PR pode ter um diretório com esse nome)
+        run: rm -rf .org-security
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with: { repository: BullCredTech/.github, ref: '${{ steps.central.outputs.sha }}', path: .org-security, persist-credentials: false }
+      # `.org-security` é caminho reservado: se o PR rastreia algo com esse nome, os scans não o cobririam
+      # (o diretório é apagado e excluído deles). Olha a árvore do commit, não a de trabalho.
+      - name: Caminho reservado .org-security
+        run: bash .org-security/security-checks/scripts/reserved.sh "$GITHUB_WORKSPACE"
+      - name: Validar os SHAs do evento
+        run: |
+          set -euo pipefail
+          for v in BASE_SHA HEAD_SHA; do
+            [[ "${!v}" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]] || { echo "::error::$v ausente ou inválido"; exit 1; }
+          done
+      # O arquivo de exceções vem da branch de DESTINO: um PR não afrouxa os próprios checks.
+      # Se não existe na base, o config.sh recebe um diretório sem ele (config_present=false).
+      - id: config
+        run: |
+          set -euo pipefail
+          base_cfg="$(mktemp -d)"; mkdir -p "$base_cfg/.github"
+          git show "$BASE_SHA:.github/security-checks.yml" > "$base_cfg/.github/security-checks.yml" 2>/dev/null || rm -f "$base_cfg/.github/security-checks.yml"
+          if out="$(bash .org-security/security-checks/scripts/config.sh "$base_cfg")"; then
+            echo "$out" >> "$GITHUB_OUTPUT"; echo "config_ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "$out"; echo "config_ok=false" >> "$GITHUB_OUTPUT"
+          fi
+      - id: changes
+        env:
+          EXTRA: ${{ steps.config.outputs.docs_paths }}
+        run: bash .org-security/security-checks/scripts/changes.sh "$GITHUB_WORKSPACE" "$BASE_SHA" "$HEAD_SHA" "$EXTRA" >> "$GITHUB_OUTPUT"
+
+  gitleaks:
+    name: 'org-security / gitleaks'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with: { fetch-depth: 0, persist-credentials: false }
+      # Onde roda o workflow central: imprime a origem (para conferir na onda -1) e só segue se o
+      # workflow vem do repo BullCredTech/.github. Sem fallback silencioso: fail-closed.
+      - id: central
+        env:
+          WF_REF: ${{ github.workflow_ref }}
+          WF_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          echo "workflow_ref=$WF_REF"
+          echo "workflow_sha=$WF_SHA"
+          case "$WF_REF" in
+            BullCredTech/.github/*) ;;
+            *) echo "::error::este workflow não está rodando a partir de BullCredTech/.github ($WF_REF); os scripts centrais não podem ser localizados"; exit 1 ;;
+          esac
+          [[ "$WF_SHA" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]] || { echo "::error::workflow_sha ausente ou inválido"; exit 1; }
+          echo "sha=$WF_SHA" >> "$GITHUB_OUTPUT"
+      - name: Limpar .org-security (um PR pode ter um diretório com esse nome)
+        run: rm -rf .org-security
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with: { repository: BullCredTech/.github, ref: '${{ steps.central.outputs.sha }}', path: .org-security, persist-credentials: false }
+      # Configs/ignores das ferramentas vêm da base: o PR não relaxa os próprios checks (vale após o merge, via CODEOWNERS).
+      - name: Restaurar configs das ferramentas da branch de destino
+        run: bash .org-security/security-checks/scripts/base-configs.sh "$BASE_SHA"
+      # Supressões inline continuam permitidas, mas ficam visíveis no resumo e como annotations (nunca falha).
+      - name: Listar supressões adicionadas neste PR
+        run: bash .org-security/security-checks/scripts/suppressions.sh "$BASE_SHA" "$HEAD_SHA"
+      - name: Instalar gitleaks 8.30.1 (checksum conferido)
+        run: |
+          set -euo pipefail
+          f=gitleaks_8.30.1_linux_x64.tar.gz
+          curl -fsSL --retry 3 -o "/tmp/$f" "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/$f"
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  /tmp/$f" | sha256sum -c -
+          tar -xzf "/tmp/$f" -C /tmp gitleaks
+      - name: Varrer o histórico
+        run: |
+          set -euo pipefail
+          args=(detect --source=. --redact --verbose --exit-code=1)
+          [ -f .gitleaks.toml ] && args+=(--config=.gitleaks.toml)
+          /tmp/gitleaks "${args[@]}"
+
+  semgrep:
+    name: 'org-security / semgrep'
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Arquivo de exceções inválido
+        if: needs.prepare.outputs.config_ok != 'true'
+        run: |
+          echo "::error::.github/security-checks.yml inválido (ver o job prepare)"
+          exit 1
+      - name: PR só de documentação ou check desligado
+        if: needs.prepare.outputs.config_ok == 'true' && (needs.prepare.outputs.docs_only == 'true' || contains(needs.prepare.outputs.skip, 'semgrep'))
+        run: |
+          echo "Sem scan: PR só de documentação ou skip declarado no repo." | tee -a "$GITHUB_STEP_SUMMARY"
+      # Credencial persistida DE PROPÓSITO, só neste job (padrão do bull-tracking #53): o `semgrep ci`
+      # busca a branch base para comparar, e em repo privado o fetch sem credencial aborta e o check sai verde.
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        if: needs.prepare.outputs.config_ok == 'true' && needs.prepare.outputs.docs_only != 'true' && !contains(needs.prepare.outputs.skip, 'semgrep')
+        with: { fetch-depth: 0 }
+      - name: Limpar .org-security (um PR pode ter um diretório com esse nome)
+        if: needs.prepare.outputs.config_ok == 'true' && needs.prepare.outputs.docs_only != 'true' && !contains(needs.prepare.outputs.skip, 'semgrep')
+        run: rm -rf .org-security
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        if: needs.prepare.outputs.config_ok == 'true' && needs.prepare.outputs.docs_only != 'true' && !contains(needs.prepare.outputs.skip, 'semgrep')
+        with: { repository: BullCredTech/.github, ref: '${{ needs.prepare.outputs.central_sha }}', path: .org-security, persist-credentials: false }
+      # Configs/ignores das ferramentas vêm da base: o PR não relaxa os próprios checks (vale após o merge, via CODEOWNERS).
+      - name: Restaurar configs das ferramentas da branch de destino
+        if: needs.prepare.outputs.config_ok == 'true' && needs.prepare.outputs.docs_only != 'true' && !contains(needs.prepare.outputs.skip, 'semgrep')
+        run: bash .org-security/security-checks/scripts/base-configs.sh "$BASE_SHA"
+      # Supressões inline continuam permitidas, mas ficam visíveis no resumo e como annotations (nunca falha).
+      - name: Listar supressões adicionadas neste PR
+        if: needs.prepare.outputs.config_ok == 'true' && needs.prepare.outputs.docs_only != 'true' && !contains(needs.prepare.outputs.skip, 'semgrep')
+        run: bash .org-security/security-checks/scripts/suppressions.sh "$BASE_SHA" "$HEAD_SHA"
+      - name: semgrep ci
+        if: needs.prepare.outputs.config_ok == 'true' && needs.prepare.outputs.docs_only != 'true' && !contains(needs.prepare.outputs.skip, 'semgrep')
+        uses: docker://semgrep/semgrep@sha256:9349edbadf90c3f3c0c3f55867625354e89680e6fa10d9034042af52fdb0e0d0
+        env:
+          SEMGREP_BASELINE_REF: ${{ env.BASE_SHA }}
+        with:
+          # semgrep_extra já vem validado pelo config.sh (só `--config p/...` ou `--config r/...`).
+          # --exclude: o diretório .org-security (scripts centrais) não é código do repo e não é rastreado pelo git.
+          args: semgrep ci --config=auto --no-suppress-errors --exclude=.org-security ${{ needs.prepare.outputs.semgrep_extra }}
+
+  trivy:
+    name: 'org-security / trivy'
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Arquivo de exceções inválido
+        if: needs.prepare.outputs.config_ok != 'true'
+        run: |
+          echo "::error::.github/security-checks.yml inválido (ver o job prepare)"
+          exit 1
+      - name: PR só de documentação ou check desligado
+        if: needs.prepare.outputs.config_ok == 'true' && (needs.prepare.outputs.docs_only == 'true' || contains(needs.prepare.outputs.skip, 'trivy'))
+        run: |
+          echo "Sem scan: PR só de documentação ou skip declarado no repo." | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        if: needs.prepare.outputs.config_ok == 'true' && needs.prepare.outputs.docs_only != 'true' && !contains(needs.prepare.outputs.skip, 'trivy')
+        with: { fetch-depth: 0, persist-credentials: false }
+      - name: Limpar .org-security (um PR pode ter um diretório com esse nome)
+        if: needs.prepare.outputs.config_ok == 'true' && needs.prepare.outputs.docs_only != 'true' && !contains(needs.prepare.outputs.skip, 'trivy')
+        run: rm -rf .org-security
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        if: needs.prepare.outputs.config_ok == 'true' && needs.prepare.outputs.docs_only != 'true' && !contains(needs.prepare.outputs.skip, 'trivy')
+        with: { repository: BullCredTech/.github, ref: '${{ needs.prepare.outputs.central_sha }}', path: .org-security, persist-credentials: false }
+      # Configs/ignores das ferramentas vêm da base: o PR não relaxa os próprios checks (vale após o merge, via CODEOWNERS).
+      - name: Restaurar configs das ferramentas da branch de destino
+        if: needs.prepare.outputs.config_ok == 'true' && needs.prepare.outputs.docs_only != 'true' && !contains(needs.prepare.outputs.skip, 'trivy')
+        run: bash .org-security/security-checks/scripts/base-configs.sh "$BASE_SHA"
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        if: needs.prepare.outputs.config_ok == 'true' && needs.prepare.outputs.docs_only != 'true' && !contains(needs.prepare.outputs.skip, 'trivy')
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: '1'
+          skip-dirs: node_modules,dist,coverage,build,.worktrees,.venv,.terraform,.terragrunt-cache,.org-security
+
+  license:
+    name: 'org-security / license'
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Arquivo de exceções inválido
+        if: needs.prepare.outputs.config_ok != 'true'
+        run: |
+          echo "::error::.github/security-checks.yml inválido (ver o job prepare)"
+          exit 1
+      - name: PR só de documentação ou check desligado
+        if: needs.prepare.outputs.config_ok == 'true' && (needs.prepare.outputs.docs_only == 'true' || contains(needs.prepare.outputs.skip, 'license'))
+        run: |
+          echo "Sem scan: PR só de documentação ou skip declarado no repo." | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        id: co
+        if: needs.prepare.outputs.config_ok == 'true' && needs.prepare.outputs.docs_only != 'true' && !contains(needs.prepare.outputs.skip, 'license')
+        with: { persist-credentials: false }
+      - name: Limpar .org-security (um PR pode ter um diretório com esse nome)
+        if: steps.co.outcome == 'success'
+        run: rm -rf .org-security
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        if: steps.co.outcome == 'success'
+        with: { repository: BullCredTech/.github, ref: '${{ needs.prepare.outputs.central_sha }}', path: .org-security, persist-credentials: false }
+      - id: eco
+        if: steps.co.outcome == 'success'
+        run: bash .org-security/security-checks/scripts/license.sh detect "$GITHUB_WORKSPACE" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        if: steps.eco.outputs.node == 'true'
+        with: { node-version: '24' }
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        if: steps.eco.outputs.python == 'true' || steps.eco.outputs.flutter == 'true'
+        with: { python-version: '3.12' }
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        if: steps.eco.outputs.go == 'true'
+        with: { go-version: 'stable' }
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        if: steps.eco.outputs.flutter == 'true'
+        with: { channel: stable }
+      - name: Checar licenças
+        if: steps.co.outcome == 'success'
+        env:
+          EXTRA: ${{ needs.prepare.outputs.license_extra }}
+          ORG_SECURITY_SHA: ${{ needs.prepare.outputs.central_sha }}
+        run: bash .org-security/security-checks/scripts/license.sh check "$GITHUB_WORKSPACE" .org-security/security-checks/license-allowlist.txt "$EXTRA"
