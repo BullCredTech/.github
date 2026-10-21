@@ -1,4 +1,5 @@
-# Apenas @lucas-bullbanker pode aprovar mudanças neste repo
+# @lucas-bullbanker é o dono padrão deste repo. Os arquivos do workflow central de segurança (abaixo)
+# também têm @BullCredTech/devops como dono (vale quando o time tem permissão de escrita neste repo).
 *    @lucas-bullbanker
 
 # Workflow central de segurança (org-security): scripts, testes e documentação

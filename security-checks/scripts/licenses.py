@@ -184,7 +184,9 @@ def _licenca_dist(meta):
         return '; '.join(classes)
     campo = (meta.get('License') or '').strip()
     if campo and ('\n' in campo or len(campo) > 100):
-        return detectar_licenca(campo)
+        reconhecida = detectar_licenca(campo)
+        # texto longo que não se reconhece vai como uma linha só e REPROVA na allowlist (vazio/UNKNOWN só avisa)
+        return reconhecida or ' '.join(campo.split())[:200]
     return campo
 
 

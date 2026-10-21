@@ -40,7 +40,7 @@ Também vale como "não é só documentação" um PR sem nenhum arquivo alterado
 
 ## 3. Arquivos lidos da branch de destino, não do PR
 
-Um PR não pode afrouxar os próprios checks. Por isso estes arquivos são lidos **da branch de destino (a base do PR)**; o que está no PR é descartado antes de cada ferramenta rodar (se a base não tem o arquivo, ele é removido):
+Um PR não pode afrouxar os próprios checks. Por isso estes arquivos são lidos **da branch de destino (a base do PR)**; o que está no PR é descartado antes de cada ferramenta rodar (as ferramentas ignoram o do PR e usam o da base; se a base não tem o arquivo, ele é removido; o `.github/security-checks.yml` é lido da base para um diretório temporário, não do PR):
 
 - `.github/security-checks.yml`
 - `.gitleaks.toml`
@@ -122,7 +122,7 @@ O job **não executa código do repo**: não roda `npm`/`yarn` com scripts, não
 
 - Só **wheels** (`pip install --only-binary=:all:`). Se alguma dependência não tem wheel, o check reprova com "dependência sem wheel ... peça exceção"; não há fallback para compilar a partir de código-fonte.
 - **Limitação conhecida:** hoje a única exceção para uma dependência sem wheel é `skip: license` no `.github/security-checks.yml`, que desliga a verificação de licença do repo inteiro (com `reason` escrito, revisado pelo `devops`). Não existe exceção por pacote; se isso virar um problema recorrente, peça ao `devops` para considerar uma exceção por pacote.
-- O inventário de licenças é feito lendo só os metadados (`.dist-info`) do ambiente, com o interpretador do sistema em modo isolado (`-I -S`): nada instalado é importado nem executado, e arquivos `.pth` de wheels não são processados durante a avaliação. O `pip` roda uma única vez para instalar todos os requisitos juntos (instalar é a única etapa que roda código de terceiros, e a integridade do verificador é conferida antes e depois).
+- O inventário de licenças é feito lendo só os metadados (`.dist-info`) do ambiente, com o interpretador do sistema em modo isolado (`-I -S`): nada instalado é importado nem executado, e arquivos `.pth` de wheels não são processados durante a avaliação. Os requisitos são instalados numa **única instalação** (as instalações das próprias ferramentas, `pip` e `uv`, acontecem antes dela); instalar é a etapa que pode rodar código de terceiros, e a integridade do verificador é conferida antes e depois.
 - Arquivos `requirements*.txt` (e `requirements/*.txt`) de produção são lidos; arquivos de desenvolvimento e teste são pulados (`requirements-dev.txt`, `requirements-test*.txt`, `dev-requirements*.txt`, e `dev.txt`, `test.txt`, `lint.txt`, `docs.txt` dentro de `requirements/`). Nomes como `requirements-devops.txt` **são** instalados.
 - Cada linha dos requirements passa por uma **lista de permissão**: especificadores de versão (`pacote`, `pacote[extra]==1.0`, `Django>=4.2,<5`, marcadores de ambiente após `;` e `--hash=...`) e inclusões `-r`/`-c` para arquivos dentro do mesmo projeto. Qualquer outra coisa reprova mostrando a linha: opções (`-e`, `--index-url`, `--extra-index-url`, `--find-links`, `--pre`, `--no-binary`...), URLs e referências diretas (`@`, `git+`, `file:`), caminhos locais e arquivos binários locais.
 - `pyproject.toml`: `[project].dependencies` e `[tool.poetry.dependencies]` (sem `python`, com as restrições do poetry convertidas) são extraídos **sem executar o projeto**. Suportado também `uv.lock` (via `uv export`, sem emitir o próprio projeto).

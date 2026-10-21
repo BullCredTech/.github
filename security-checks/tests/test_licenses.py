@@ -112,3 +112,19 @@ def test_site_nao_executa_codigo_instalado(tmp_path):
     _dist(site, "x", "1.0", "License-Expression: MIT")
     r = subprocess.run([sys.executable, "-I", "-S", str(SCRIPT), "site", str(site)], capture_output=True, text=True)
     assert r.returncode == 0 and not marcador.exists()
+
+def test_site_licenca_longa_nao_reconhecida_reprova_e_vazia_so_avisa(tmp_path):
+    site = tmp_path / "site-packages"; site.mkdir()
+    texto = "Este software e propriedade da empresa X.\n Proibida a redistribuicao sem autorizacao. " * 5
+    _dist(site, "proprietario", "1.0", "License: " + texto.replace("\n", "\n        "))
+    inv = run(["site", str(site)])
+    assert inv.returncode == 0
+    lic = json.loads(inv.stdout)[0]["License"]
+    assert lic and "\n" not in lic and len(lic) <= 200
+    r = run(["pip", "--allow", ALLOW], inv.stdout)
+    assert r.returncode == 1 and "proprietario" in r.stdout
+    # vazio / UNKNOWN continua só avisando
+    site2 = tmp_path / "s2"; site2.mkdir()
+    _dist(site2, "semnada", "1.0", "License: UNKNOWN")
+    r2 = run(["pip", "--allow", ALLOW], run(["site", str(site2)]).stdout)
+    assert r2.returncode == 0 and "sem licença declarada" in r2.stdout
