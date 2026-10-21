@@ -36,8 +36,20 @@ while (args.length) {
 if (!raiz) { console.error('uso: npmwalk.js <raiz> [--min N] [--expect dir...]'); process.exit(2); }
 
 const erros = [];
-let raizReal;
-try { raizReal = fs.realpathSync(raiz); } catch (e) { console.error(`npmwalk: raiz inexistente: ${raiz}`); process.exit(1); }
+// Rótulo de caminho para mensagens: relativo à raiz do repo; fora dele, a partir do último node_modules/.
+function rotulo(p, nome) {
+  let rel;
+  try { rel = path.relative(raizReal, p); } catch (e) { rel = '..'; }
+  if (rel === '') return '.';
+  if (!rel.startsWith('..') && !path.isAbsolute(rel)) return rel;
+  const seg = p.split(path.sep);
+  const i = seg.lastIndexOf('node_modules');
+  if (i >= 0) return seg.slice(i).join('/');
+  return `<fora do repo>/${nome || path.basename(p)}`;
+}
+
+let raizReal = path.resolve(raiz);
+try { raizReal = fs.realpathSync(raiz); } catch (e) { console.error('npmwalk: raiz inexistente'); process.exit(1); }
 
 const visitados = new Set();
 const pacotes = new Map();
@@ -79,7 +91,7 @@ function percorrer(nm) {
   if (visitados.has(real)) return;
   visitados.add(real);
   let nomes;
-  try { nomes = fs.readdirSync(nm).sort(); } catch (e) { erros.push(`não consegui listar ${nm}`); return; }
+  try { nomes = fs.readdirSync(nm).sort(); } catch (e) { erros.push(`não consegui listar ${rotulo(nm)}`); return; }
   for (const n of nomes) {
     if (n.startsWith('.')) continue; // .bin, .cache, .package-lock.json, .yarn-integrity...
     const p = path.join(nm, n);
@@ -98,7 +110,7 @@ function pacote(p) {
   try { lst = fs.lstatSync(p); } catch (e) { return; }
   if (!lst.isDirectory() && !lst.isSymbolicLink()) return;
   let real;
-  try { real = fs.realpathSync(p); } catch (e) { erros.push(`symlink quebrado: ${p}`); return; }
+  try { real = fs.realpathSync(p); } catch (e) { erros.push(`symlink quebrado: ${rotulo(p)}`); return; }
   const { dentro, rel } = relativo(real);
   if (proprios.has(real)) {
     ligados.add(real);                         // a raiz ou um workspace informado
@@ -107,12 +119,12 @@ function pacote(p) {
   }
   let pj;
   try { pj = JSON.parse(fs.readFileSync(path.join(real, 'package.json'), 'utf8')); } catch (e) {
-    erros.push(`package.json ilegível em ${p}`); return;
+    erros.push(`package.json ilegível em ${rotulo(p)}`); return;
   }
-  if (!pj || typeof pj !== 'object') { erros.push(`package.json inválido em ${p}`); return; }
+  if (!pj || typeof pj !== 'object') { erros.push(`package.json inválido em ${rotulo(p)}`); return; }
   const nome = pj.name || path.basename(p);
   const versao = pj.version || '?';
-  const caminho = dentro ? rel : real;
+  const caminho = rotulo(real, nome);
   if (!pacotes.has(real)) pacotes.set(real, Object.assign({ Name: nome, Version: versao, Path: caminho }, licenca(pj, real)));
   percorrer(path.join(real, 'node_modules'));
 }
@@ -121,8 +133,8 @@ percorrer(path.join(raizReal, 'node_modules'));
 
 for (const e of esperados) {
   let real;
-  try { real = fs.realpathSync(e); } catch (x) { erros.push(`workspace inexistente: ${e}`); continue; }
-  if (!ligados.has(real)) erros.push(`workspace não instalado em node_modules: ${e}`);
+  try { real = fs.realpathSync(e); } catch (x) { erros.push(`workspace inexistente: ${rotulo(path.resolve(e))}`); continue; }
+  if (!ligados.has(real)) erros.push(`workspace não instalado em node_modules: ${rotulo(real)}`);
 }
 if (pacotes.size < min) erros.push(`esperava ao menos ${min} pacote(s) instalado(s) e achei ${pacotes.size}`);
 

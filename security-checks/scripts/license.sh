@@ -69,6 +69,8 @@ if [ "$cmd" = "detect" ]; then
 fi
 
 resumo() { echo "$1" | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"; }
+# caminho relativo à raiz do repo (nunca o caminho absoluto do runner nas mensagens)
+rel() { local x="${1#"$root"}"; x="${x#/}"; echo "${x:-.}"; }
 msg() { echo "$1" >&2; echo "$1" >> "${GITHUB_STEP_SUMMARY:-/dev/null}"; }
 
 # $1 está dentro de $2 (resolvendo symlinks e ..)?
@@ -81,7 +83,7 @@ dentro_de() {
 }
 
 # Parser de requirements por LISTA DE PERMISSÃO: só entra o que é reconhecido; o resto reprova com a linha.
-PY_SPEC_RE='^[a-z0-9][a-z0-9._-]*(\[[a-z0-9,._-]+\])?[[:space:]]*(([<>=!~]=?|===)[^;@[:space:]]+([[:space:]]*,[[:space:]]*([<>=!~]=?|===)[^;@[:space:]]+)*)?([[:space:]]*;.*)?$'
+PY_SPEC_RE='^[a-z0-9][a-z0-9._-]*(\[[a-z0-9,._-]+\])?[[:space:]]*(([<>=!~]=?|===)[[:space:]]*[a-z0-9*][^;@[:space:]]*([[:space:]]*,[[:space:]]*([<>=!~]=?|===)[[:space:]]*[a-z0-9*][^;@[:space:]]*)*)?([[:space:]]*;.*)?$'
 # alfabeto permitido no marcador de ambiente (depois do primeiro ';')
 PY_MARCADOR_RE="^[a-z0-9_.'\"[:space:]()<>=!~,*-]*\$"
 PY_INC_RE='^(--requirement|--constraint|-r|-c)[[:space:]=]*(.+)$'
@@ -93,10 +95,10 @@ PY_VISTOS=""
 # Imprime em stdout as linhas de requisito aceitas (para a contagem). Continuação com \ é juntada antes.
 py_conferir() { # $1 = arquivo, $2 = raiz do projeto, $3 = profundidade
   local f="$1" proj="$2" prof="$3" linha acum="" real
-  [ "$prof" -le 5 ] || { msg "requirements: inclusões demais em $f"; return 1; }
-  [ -f "$f" ] || { msg "requirements: arquivo incluído não existe: $f"; return 1; }
+  [ "$prof" -le 5 ] || { msg "requirements: inclusões demais em $(rel "$f")"; return 1; }
+  [ -f "$f" ] || { msg "requirements: arquivo incluído não existe: $(rel "$f")"; return 1; }
   # shellcheck disable=SC2094 # só lê $f
-  if ! tr -d '\000' < "$f" | cmp -s - "$f"; then msg "requirements: não permitido em $f: byte NUL"; return 1; fi
+  if ! tr -d '\000' < "$f" | cmp -s - "$f"; then msg "requirements: não permitido em $(rel "$f"): byte NUL"; return 1; fi
   real="$(cd "$(dirname "$f")" && pwd -P)/$(basename "$f")"
   case "$PY_VISTOS" in *"|$real|"*) return 0 ;; esac   # ciclo ou arquivo já conferido
   PY_VISTOS="$PY_VISTOS|$real|"
@@ -123,28 +125,28 @@ py_linha() { # $1 = linha, $2 = arquivo, $3 = projeto, $4 = profundidade
     inc="${BASH_REMATCH[2]}"
     inc="${inc#"${inc%%[![:space:]]*}"}"
     if [[ "$inc" == *://* || "$inc" == *"$PY_DOLAR"* || "$inc" == *%* ]]; then
-      msg "requirements: não permitido em $f: $linha"; return 1
+      msg "requirements: não permitido em $(rel "$f"): $linha"; return 1
     fi
     case "$inc" in /*) ;; *) inc="$(dirname "$f")/$inc" ;; esac
-    dentro_de "$(dirname "$inc")" "$proj" || { msg "requirements: não permitido em $f (inclusão fora do projeto): $linha"; return 1; }
+    dentro_de "$(dirname "$inc")" "$proj" || { msg "requirements: não permitido em $(rel "$f") (inclusão fora do projeto): $linha"; return 1; }
     py_conferir "$inc" "$proj" $((prof+1)) || return 1
     return 0
   fi
   if [[ "$ll" == *://* || "$ll" == *"$PY_DOLAR"* || "$ll" == *%* || "$ll" == *@* ]]; then
-    msg "requirements: não permitido em $f: $linha"; return 1
+    msg "requirements: não permitido em $(rel "$f"): $linha"; return 1
   fi
   if ! [[ "$ll" =~ $PY_SPEC_RE ]]; then
-    msg "requirements: não permitido em $f: $linha"; return 1
+    msg "requirements: não permitido em $(rel "$f"): $linha"; return 1
   fi
   antes="${ll%%;*}"
   if [[ "$ll" == *\;* ]]; then
     marcador="${ll#*;}"
-    [[ "$marcador" =~ $PY_MARCADOR_RE ]] || { msg "requirements: não permitido em $f (marcador com caracteres fora do alfabeto): $linha"; return 1; }
+    [[ "$marcador" =~ $PY_MARCADOR_RE ]] || { msg "requirements: não permitido em $(rel "$f") (marcador com caracteres fora do alfabeto): $linha"; return 1; }
   fi
-  if [[ "$ll" =~ [[:space:]]- ]]; then msg "requirements: não permitido em $f (opção depois do requisito): $linha"; return 1; fi
+  if [[ "$ll" =~ [[:space:]]- ]]; then msg "requirements: não permitido em $(rel "$f") (opção depois do requisito): $linha"; return 1; fi
   [[ "$ll" =~ ^([a-z0-9][a-z0-9._-]*) ]] && nome="${BASH_REMATCH[1]}"
   if [[ "$antes" == */* || "$nome" =~ \.(whl|zip|gz|tgz|tar|bz2|egg)$ ]]; then
-    msg "requirements: não permitido em $f (caminho/arquivo local): $linha"; return 1
+    msg "requirements: não permitido em $(rel "$f") (caminho/arquivo local): $linha"; return 1
   fi
   echo "$ll"
 }
@@ -176,15 +178,15 @@ node_checar() { # $1 = dir, $2 = rótulo (npm|yarn)
   if [ "$decl" = true ]; then
     if [ "$rot" = npm ]; then
       wsdirs="$(cd "$d" && npm query .workspace | node "$here/workspaces.js" npmdirs "$d")" \
-        || { msg "workspaces: não consegui listar os workspaces de $d com 'npm query'"; return 1; }
+        || { msg "workspaces: não consegui listar os workspaces de $(rel "$d") com 'npm query'"; return 1; }
     else
       wsdirs="$(cd "$d" && yarn workspaces info --json | node "$here/workspaces.js" yarndirs "$d")" \
-        || { msg "workspaces: não consegui listar os workspaces de $d com 'yarn workspaces info'"; return 1; }
+        || { msg "workspaces: não consegui listar os workspaces de $(rel "$d") com 'yarn workspaces info'"; return 1; }
     fi
-    [ -n "$wsdirs" ] || { msg "workspaces: declarados em $d, mas o gerenciador não listou nenhum"; return 1; }
+    [ -n "$wsdirs" ] || { msg "workspaces: declarados em $(rel "$d"), mas o gerenciador não listou nenhum"; return 1; }
     while IFS= read -r w; do
       [ -n "$w" ] || continue
-      dentro_de "$w" "$d" || { msg "workspaces: $w está fora da raiz $d"; return 1; }
+      dentro_de "$w" "$d" || { msg "workspaces: um workspace resolve para fora da raiz do repo (${w##*/})"; return 1; }
       arr+=("$w")
       wargs+=(--expect "$w")
     done <<< "$wsdirs"
@@ -202,9 +204,9 @@ $w"; done
 
 registrar_node() { # $1 = dir, $2 = rótulo
   if node_checar "$1" "$2"; then
-    resumo "✅ licença: $1 ($2, $NWS workspaces)"
+    resumo "✅ licença: $(rel "$1") ($2, $NWS workspaces)"
   else
-    resumo "❌ licença: $1 ($2)"; falhou=1
+    resumo "❌ licença: $(rel "$1") ($2)"; falhou=1
   fi
   checados=$((checados+1))
 }
@@ -212,7 +214,7 @@ registrar_node() { # $1 = dir, $2 = rótulo
 FEITOS=""
 # pnpm não é suportado: falha fechado em vez de ignorar.
 while IFS= read -r pl; do
-  resumo "❌ licença: $(dirname "$pl"): pnpm não suportado (pnpm-lock.yaml)"; falhou=1; checados=$((checados+1))
+  resumo "❌ licença: $(rel "$(dirname "$pl")"): pnpm não suportado (pnpm-lock.yaml)"; falhou=1; checados=$((checados+1))
 done < <(achar pnpm-lock.yaml)
 
 # 1ª passada: raízes com lockfile. Elas dizem (via npm/yarn) quais diretórios são workspaces.
@@ -234,10 +236,10 @@ while IFS= read -r pj; do
   if [ -f "$d/pnpm-lock.yaml" ]; then continue; fi
   if h="$(node "$here/workspaces.js" hasdeps "$d")"; then
     if [ "$h" = true ]; then
-      resumo "❌ licença: $d: sem lockfile: dependências não verificáveis"; falhou=1; checados=$((checados+1))
+      resumo "❌ licença: $(rel "$d"): sem lockfile: dependências não verificáveis"; falhou=1; checados=$((checados+1))
     fi
   else
-    resumo "❌ licença: $d: package.json ilegível"; falhou=1; checados=$((checados+1))
+    resumo "❌ licença: $(rel "$d"): package.json ilegível"; falhou=1; checados=$((checados+1))
   fi
 done < <(achar package.json)
 
@@ -296,7 +298,7 @@ py_checar() { # $1 = dir do projeto, $2 = dir temporário (já criado)
     if ! pip install -q --only-binary=:all: -r "$r"; then
       # sem wheel? tenta de novo a partir do código-fonte; se falhar de novo, é erro de verdade
       pip install -q -r "$r" || return 1
-      msg "⚠️ instalado a partir de código-fonte: $d ($r)"
+      msg "⚠️ instalado a partir de código-fonte: $(rel "$d") ($r)"
     fi
   done
   pip install -q pip-licenses==5.5.5 || return 1
@@ -304,26 +306,26 @@ py_checar() { # $1 = dir do projeto, $2 = dir temporário (já criado)
   pip-licenses --format=json --from=mixed > "$inv" || return 1
   # Declarou dependências e o inventário veio vazio: falha fechado.
   [ "$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))))' "$inv")" -gt 0 ] \
-    || { msg "python: $d declara dependências, mas o inventário veio vazio"; return 1; }
+    || { msg "python: $(rel "$d") declara dependências, mas o inventário veio vazio"; return 1; }
   python3 "$here/licenses.py" pip --allow "$allow" < "$inv"
 }
 
 while IFS= read -r d; do
   if { [ -f "$d/Pipfile" ] || [ -f "$d/Pipfile.lock" ]; } && [ ! -f "$d/pyproject.toml" ]; then
-    resumo "❌ licença: $d: pipenv não suportado (Pipfile)"; falhou=1; checados=$((checados+1)); continue
+    resumo "❌ licença: $(rel "$d"): pipenv não suportado (Pipfile)"; falhou=1; checados=$((checados+1)); continue
   fi
   tmpd="$(mktemp -d)"
   if saida="$(py_checar "$d" "$tmpd" 2>&1)"; then
     if [ "$(printf '%s\n' "$saida" | tail -1)" = NADA ]; then
-      resumo "ℹ️ $d: nenhuma dependência de produção declarada (python), nada a verificar"
+      resumo "ℹ️ $(rel "$d"): nenhuma dependência de produção declarada (python), nada a verificar"
     else
       printf '%s\n' "$saida"
-      resumo "✅ licença: $d (python)"
+      resumo "✅ licença: $(rel "$d") (python)"
       checados=$((checados+1))
     fi
   else
     printf '%s\n' "$saida"
-    resumo "❌ licença: $d (python)"; falhou=1
+    resumo "❌ licença: $(rel "$d") (python)"; falhou=1
     checados=$((checados+1))
   fi
   rm -rf "$tmpd"
@@ -342,10 +344,10 @@ go_checar() { # $1 = dir
 while IFS= read -r gm; do
   d="$(dirname "$gm")"
   if saida="$(go_checar "$d" 2>&1)"; then
-    resumo "✅ licença: $d (go)"
+    resumo "✅ licença: $(rel "$d") (go)"
   else
     printf '%s\n' "$saida"
-    resumo "❌ licença: $d (go): $(printf '%s\n' "$saida" | tail -3 | tr '\n' ' ')"; falhou=1
+    resumo "❌ licença: $(rel "$d") (go): $(printf '%s\n' "$saida" | tail -3 | tr '\n' ' ')"; falhou=1
   fi
   checados=$((checados+1))
 done < <(achar go.mod)
@@ -354,7 +356,7 @@ done < <(achar go.mod)
 while IFS= read -r ps; do
   d="$(dirname "$ps")"
   (flutter pub get --directory "$d" >/dev/null && python3 "$here/licenses.py" dart --allow "$allow" "$d") \
-    || { resumo "❌ licença: $d (flutter)"; falhou=1; }
+    || { resumo "❌ licença: $(rel "$d") (flutter)"; falhou=1; }
   checados=$((checados+1))
 done < <(achar pubspec.yaml)
 

@@ -521,3 +521,31 @@ walk_fixture() {
   rm -rf "$base"
   [[ "$output" == *"python=true"* ]] || return 1
 }
+
+@test "G1: espacos entre operador e versao e em volta das virgulas sao aceitos" {
+  mkdir -p "$REPO/svc"
+  printf 'six == 1\nsix[a] >= 1, < 2 ; python_version >= "3.8"\nDjango >= 4.2, <5\nrequests >=2.31 , !=2.32\n' > "$REPO/svc/requirements.txt"
+  run bash "$SCRIPT" pyreq "$REPO/svc" "$REPO/svc/requirements.txt"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"six == 1"* ]] || return 1
+  [[ "$output" == *"django >= 4.2, <5"* ]] || return 1
+  # ainda recusa o que não é versão
+  for l in 'six == 1 @ x' 'six == --pre' 'six >= 1 -e .' 'six == ./x.whl' 'six == a/b'; do
+    printf '%s\n' "$l" > "$REPO/svc/requirements.txt"
+    run bash "$SCRIPT" pyreq "$REPO/svc" "$REPO/svc/requirements.txt"
+    [ "$status" -ne 0 ] || { echo "passou: $l"; return 1; }
+  done
+}
+
+@test "G4: mensagens não mostram caminho absoluto de fora do repo" {
+  printf '{"name":"root","version":"1.0.0"}' > "$REPO/package.json"
+  OUT="$(mktemp -d)"; nm "$OUT/pkg" fora 1.0.0 ',"license":"AGPL-3.0"'
+  mkdir -p "$REPO/node_modules"; ln -s "$OUT/pkg" "$REPO/node_modules/fora"
+  nm "$OUT/sem" sem 1.0.0 ''; ln -s "$OUT/sem" "$REPO/node_modules/sem"
+  bash "$SCRIPT" npmwalk "$REPO" > "$REPO/inv.json"
+  run python3 "$LIC" npm --allow "MIT" < "$REPO/inv.json"
+  [ "$status" -eq 1 ]
+  [[ "$output" != *"$OUT"* ]] || return 1
+  [[ "$output" == *"sem licença declarada: sem@1.0.0 (<fora do repo>/sem)"* ]] || return 1
+  rm -rf "$OUT"
+}
