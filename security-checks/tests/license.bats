@@ -480,11 +480,11 @@ walk_fixture() {
   echo 'six' > "$REPO/d/requirements/base.txt"; run bash "$SCRIPT" detect "$REPO"; [[ "$output" == *"python=true"* ]] || return 1
 }
 
-@test "go: GOTOOLCHAIN=local e GOWORK=off são usados" {
+@test "go: GOTOOLCHAIN=local, GOWORK=off e CGO_ENABLED=0 sao usados" {
   mkdir -p "$REPO/svc"; echo 'module m' > "$REPO/svc/go.mod"
-  shim go 'echo "TC=$GOTOOLCHAIN WORK=$GOWORK" >&2; exit 1'
+  shim go 'echo "TC=$GOTOOLCHAIN WORK=$GOWORK CGO=$CGO_ENABLED" >&2; exit 1'
   GITHUB_STEP_SUMMARY="$SHIMS/summary" PATH="$SHIMS:$PATH" run bash "$SCRIPT" check "$REPO" "$ALLOW" ""
-  [ "$status" -ne 0 ]; [[ "$output" == *"TC=local WORK=off"* ]] || return 1
+  [ "$status" -ne 0 ]; [[ "$output" == *"TC=local WORK=off CGO=0"* ]] || return 1
 }
 
 @test "B1b: marcador só com o alfabeto permitido e sem token -opção" {
@@ -548,4 +548,87 @@ walk_fixture() {
   [[ "$output" != *"$OUT"* ]] || return 1
   [[ "$output" == *"sem licença declarada: sem@1.0.0 (<fora do repo>/sem)"* ]] || return 1
   rm -rf "$OUT"
+}
+
+# ---------- W1: o job de licença não executa código do repo ----------
+@test "python: pyproject com dependências dinâmicas reprova" {
+  mkdir -p "$REPO/svc"
+  printf '[project]\nname = "x"\nversion = "0.1"\ndynamic = ["dependencies"]\n' > "$REPO/svc/pyproject.toml"
+  echo "six" > "$REPO/svc/requirements.txt"
+  run bash "$SCRIPT" check "$REPO" "$ALLOW" ""
+  [ "$status" -ne 0 ]; [[ "$output" == *"dependências dinâmicas"* ]] || return 1
+}
+
+@test "python: dependência do pyproject passa pelo mesmo parser (URL direta é recusada)" {
+  mkdir -p "$REPO/svc"
+  printf '[project]\nname = "x"\nversion = "0.1"\ndependencies = ["six @ https://evil.example/six.whl"]\n' > "$REPO/svc/pyproject.toml"
+  run bash "$SCRIPT" check "$REPO" "$ALLOW" ""
+  [ "$status" -ne 0 ]
+}
+
+@test "python: só wheels; sdist não é construído (nada do repo/pacote executa) e a mensagem explica" {
+  mkdir -p "$REPO/svc" "$SHIMS/idx/foo-1.0"
+  marker="$REPO/EXECUTOU"
+  printf 'from setuptools import setup\nopen("%s", "w").write("x")\nsetup(name="foo", version="1.0")\n' "$marker" > "$SHIMS/idx/foo-1.0/setup.py"
+  printf 'Metadata-Version: 1.0\nName: foo\nVersion: 1.0\n' > "$SHIMS/idx/foo-1.0/PKG-INFO"
+  (cd "$SHIMS/idx" && tar -czf foo-1.0.tar.gz foo-1.0)
+  echo "foo==1.0" > "$REPO/svc/requirements.txt"
+  PIP_NO_INDEX=1 PIP_FIND_LINKS="$SHIMS/idx" run bash "$SCRIPT" check "$REPO" "$ALLOW" ""
+  [ "$status" -ne 0 ]
+  [ ! -e "$marker" ]
+  [[ "$output" == *"dependência sem wheel"* ]] || return 1
+  [[ "$output" == *"peça exceção"* ]] || return 1
+  [[ "$output" != *"código-fonte:"* ]] || return 1
+}
+
+# ---------- W1: integridade do verificador ----------
+central_fixture() {
+  C="$(mktemp -d)"; mkdir -p "$C/security-checks"
+  cp -R "$BATS_TEST_DIRNAME/../scripts" "$C/security-checks/"
+  cp "$BATS_TEST_DIRNAME/../license-allowlist.txt" "$BATS_TEST_DIRNAME/../.gitignore" "$C/security-checks/"
+  find "$C" -name __pycache__ -prune -exec rm -rf {} + 2>/dev/null || true
+  (cd "$C" && git init -q && git config user.email t@t && git config user.name t && git add -A && git commit -qm c)
+  CSHA="$(git -C "$C" rev-parse HEAD)"
+}
+
+@test "integridade: SHA confere e árvore limpa => segue" {
+  central_fixture
+  echo "# docs" > "$REPO/README.md"
+  ORG_SECURITY_SHA="$CSHA" run bash "$C/security-checks/scripts/license.sh" check "$REPO" "$ALLOW" ""
+  rm -rf "$C"
+  [ "$status" -eq 0 ]
+}
+
+@test "integridade: SHA diferente => reprova" {
+  central_fixture
+  ORG_SECURITY_SHA="0000000000000000000000000000000000000001" run bash "$C/security-checks/scripts/license.sh" check "$REPO" "$ALLOW" ""
+  rm -rf "$C"
+  [ "$status" -ne 0 ]; [[ "$output" == *"verificador alterado durante o job"* ]] || return 1
+}
+
+@test "integridade: arquivo novo ou alterado no verificador => reprova" {
+  central_fixture
+  echo "x = 1" > "$C/security-checks/scripts/json.py"
+  ORG_SECURITY_SHA="$CSHA" run bash "$C/security-checks/scripts/license.sh" check "$REPO" "$ALLOW" ""
+  [ "$status" -ne 0 ]; [[ "$output" == *"verificador alterado durante o job"* ]] || return 1
+  rm "$C/security-checks/scripts/json.py"; echo "# x" >> "$C/security-checks/scripts/licenses.py"
+  ORG_SECURITY_SHA="$CSHA" run bash "$C/security-checks/scripts/license.sh" check "$REPO" "$ALLOW" ""
+  rm -rf "$C"
+  [ "$status" -ne 0 ]; [[ "$output" == *"verificador alterado durante o job"* ]] || return 1
+}
+
+@test "integridade: sem ORG_SECURITY_SHA segue e avisa" {
+  echo "# docs" > "$REPO/README.md"
+  run env -u ORG_SECURITY_SHA bash "$SCRIPT" check "$REPO" "$ALLOW" ""
+  [ "$status" -eq 0 ]; [[ "$output" == *"ORG_SECURITY_SHA"* ]] || return 1
+}
+
+@test "integridade: adulteração DURANTE a instalação é pega antes da avaliação" {
+  central_fixture
+  node_proj app; printf '{"name":"p","version":"1.0.0","dependencies":{"a":"1"}}' > "$REPO/app/package.json"
+  nm "$REPO/app/node_modules/a" a 1.0.0 ',"license":"MIT"'
+  shim npm 'echo "x" > "'"$C"'/security-checks/scripts/evil.js"; exit 0'
+  ORG_SECURITY_SHA="$CSHA" PATH="$SHIMS:$PATH" run bash "$C/security-checks/scripts/license.sh" check "$REPO" "$ALLOW" ""
+  rm -rf "$C"
+  [ "$status" -ne 0 ]; [[ "$output" == *"verificador alterado durante o job"* ]] || return 1
 }

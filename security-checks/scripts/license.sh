@@ -9,6 +9,7 @@
 # Importante: dentro de `if f` / `f || ...` o `set -e` NÃO vale, então toda função usada assim
 # tem `|| return 1` explícito depois de cada comando que importa.
 set -euo pipefail
+export PYTHONDONTWRITEBYTECODE=1   # não deixa .pyc no checkout central (a checagem de integridade olha ignorados também)
 
 here="$(cd "$(dirname "$0")" && pwd)"
 cmd="${1:?}"
@@ -154,7 +155,27 @@ py_linha() { # $1 = linha, $2 = arquivo, $3 = projeto, $4 = profundidade
 # license.sh pyreq <dir-do-projeto> <arquivo>: confere um requirements e imprime as linhas aceitas (para testes)
 if [ "$cmd" = "pyreq" ]; then PY_VISTOS=""; py_conferir "${3:?}" "$root" 0; exit; fi
 
+# Integridade do verificador: o checkout central tem de estar no SHA esperado e sem NENHUMA alteração
+# (nem arquivo novo, nem ignorado) antes de qualquer coisa dele rodar. Repetida antes de cada avaliação,
+# porque instalar dependências do repo executa código de terceiros no mesmo runner.
+# Sem ORG_SECURITY_SHA (execução local/testes) a checagem é pulada, com aviso.
+AVISOU=0
+integridade() {
+  local central
+  if [ -z "${ORG_SECURITY_SHA:-}" ]; then
+    if [ "$AVISOU" -eq 0 ]; then echo "aviso: ORG_SECURITY_SHA não definido, integridade do verificador não conferida" >&2; AVISOU=1; fi
+    return 0
+  fi
+  central="$(cd "$here/../.." && pwd)"
+  if [ "$(git -C "$central" rev-parse HEAD 2>/dev/null || true)" != "$ORG_SECURITY_SHA" ] \
+    || [ -n "$(git -C "$central" status --porcelain --ignored 2>/dev/null || echo erro)" ]; then
+    msg "verificador alterado durante o job"
+    return 1
+  fi
+}
+
 [ "$cmd" = "check" ] || { echo "comando inválido: $cmd" >&2; exit 2; }
+integridade || { resumo "❌ licença: verificador alterado durante o job"; exit 1; }
 allowfile="${3:?}"; extras="${4:-}"
 allow="$(grep -vE '^[[:space:]]*(#|$)' "$allowfile" | paste -sd ';' -)"
 [ -z "$extras" ] || allow="$allow;$extras"
@@ -197,8 +218,10 @@ $w"; done
   hasd="$(node "$here/workspaces.js" hasdeps "$d" ${arr[@]+"${arr[@]}"})" || return 1
   [ "$hasd" != true ] || margs=(--min 1)
   inv="$(mktemp)" || return 1
+  integridade || { rm -f "$inv"; return 1; }
   node "$here/npmwalk.js" "$d" ${margs[@]+"${margs[@]}"} ${wargs[@]+"${wargs[@]}"} > "$inv" || { rm -f "$inv"; return 1; }
-  python3 "$here/licenses.py" npm --allow "$allow" < "$inv" || { rm -f "$inv"; return 1; }
+  integridade || { rm -f "$inv"; return 1; }
+  python3 -I "$here/licenses.py" npm --allow "$allow" < "$inv" || { rm -f "$inv"; return 1; }
   rm -f "$inv"
 }
 
@@ -244,8 +267,19 @@ while IFS= read -r pj; do
 done < <(achar package.json)
 
 # ---------------- Python ----------------
+# O check de licença NÃO executa código do repo nem de terceiros: só wheels (`--only-binary=:all:`), sem
+# `pip install .`, sem build a partir de sdist. Dependências dinâmicas (pyproject `dynamic`, setup.py/setup.cfg)
+# não se conhecem sem executar o projeto, então reprovam.
+py_instalar() { # $1 = arquivo de requisitos
+  local saida
+  saida="$(pip install -q --only-binary=:all: -r "$1" 2>&1)" || {
+    msg "dependência sem wheel (build a partir do código-fonte não é permitido no check de licença): $(printf '%s' "$saida" | tail -5 | tr '\n' ' '); peça exceção"
+    return 1
+  }
+}
+
 py_checar() { # $1 = dir do projeto, $2 = dir temporário (já criado)
-  local d="$1" tmpd="$2" r n=0 lines pj_n=0 total=0 inv usa_pyproject=false
+  local d="$1" tmpd="$2" r n=0 lines pj_req="" total=0 inv rc=0 usa_uv=false
   local -a arqs=()
   cd "$d" || return 1
 
@@ -266,18 +300,31 @@ py_checar() { # $1 = dir do projeto, $2 = dir temporário (já criado)
     lines="$(py_conferir "$d/$r" "$d" 0)" || return 1
     [ -z "$lines" ] || n=$((n + $(printf '%s\n' "$lines" | wc -l)))
   done
+
+  # pyproject: as dependências declaradas viram um requirements temporário, conferido pelo MESMO parser.
   if [ -f pyproject.toml ]; then
-    pj_n="$(python3 "$here/pyproject_deps.py" pyproject.toml)" || return 1
-    [ "$pj_n" -eq 0 ] || usa_pyproject=true
+    python3 -I "$here/pyproject_deps.py" reqs pyproject.toml > "$tmpd/pyproject-req.txt" 2> "$tmpd/pyproject.err" || rc=$?
+    case "$rc" in
+      0) ;;
+      4) msg "python: dependências dinâmicas/setup.py: não suportado no check de licença; declare em requirements ou peça exceção"; return 1 ;;
+      *) msg "python: pyproject.toml não pôde ser lido com segurança: $(tr '\n' ' ' < "$tmpd/pyproject.err")"; return 1 ;;
+    esac
+    if [ -s "$tmpd/pyproject-req.txt" ]; then
+      PY_VISTOS=""
+      lines="$(py_conferir "$tmpd/pyproject-req.txt" "$tmpd" 0)" || return 1
+      [ -z "$lines" ] || n=$((n + $(printf '%s\n' "$lines" | wc -l)))
+      pj_req="$tmpd/pyproject-req.txt"
+    fi
   fi
-  # setup.py (ou setup.cfg com [metadata]/[options]) declara dependências que não dá para contar sem executar:
-  # instala o projeto e conta como 1.
-  if [ -f setup.py ] || { [ -f setup.cfg ] && grep -qE '^\[(metadata|options)' setup.cfg; }; then
-    usa_pyproject=true; [ "$pj_n" -gt 0 ] || pj_n=1
-  fi
-  total=$((n + pj_n))
-  [ -f uv.lock ] && total=$((total + 1))
+  [ -f uv.lock ] && usa_uv=true
+  total=$n
+  [ "$usa_uv" = true ] && total=$((total + 1))
   if [ "$total" -eq 0 ]; then
+    # setup.py / setup.cfg sem nenhuma dependência conhecida: não dá para saber sem executar
+    if [ -f setup.py ] || { [ -f setup.cfg ] && grep -qE '^\[(metadata|options)' setup.cfg; }; then
+      msg "python: dependências dinâmicas/setup.py: não suportado no check de licença; declare em requirements ou peça exceção"
+      return 1
+    fi
     echo "NADA"   # nada declarado para produção neste diretório
     return 0
   fi
@@ -285,29 +332,26 @@ py_checar() { # $1 = dir do projeto, $2 = dir temporário (já criado)
   python3 -m venv "$tmpd/venv" || return 1
   # shellcheck disable=SC1091
   . "$tmpd/venv/bin/activate"
-  pip install -q --upgrade pip >/dev/null || return 1
-  if [ -f uv.lock ]; then
-    pip install -q uv || return 1
-    uv export --frozen --no-dev --no-hashes -o "$tmpd/req.txt" >/dev/null || return 1
-    pip install -q -r "$tmpd/req.txt" || return 1
+  pip install -q --only-binary=:all: --upgrade pip >/dev/null || return 1
+  if [ "$usa_uv" = true ]; then
+    pip install -q --only-binary=:all: uv || return 1
+    uv export --frozen --no-dev --no-hashes --no-emit-project --no-emit-workspace -o "$tmpd/req.txt" >/dev/null || return 1
+    PY_VISTOS=""
+    py_conferir "$tmpd/req.txt" "$tmpd" 0 >/dev/null || return 1
+    py_instalar "$tmpd/req.txt" || return 1
   fi
-  if [ "$usa_pyproject" = true ] && [ ! -f uv.lock ]; then
-    pip install -q . || return 1
-  fi
+  if [ -n "$pj_req" ]; then py_instalar "$pj_req" || return 1; fi
   for r in ${arqs[@]+"${arqs[@]}"}; do
-    if ! pip install -q --only-binary=:all: -r "$r"; then
-      # sem wheel? tenta de novo a partir do código-fonte; se falhar de novo, é erro de verdade
-      pip install -q -r "$r" || return 1
-      msg "⚠️ instalado a partir de código-fonte: $(rel "$d") ($r)"
-    fi
+    py_instalar "$r" || return 1
   done
-  pip install -q pip-licenses==5.5.5 || return 1
+  pip install -q --only-binary=:all: pip-licenses==5.5.5 || return 1
   inv="$tmpd/inv.json"
   pip-licenses --format=json --from=mixed > "$inv" || return 1
   # Declarou dependências e o inventário veio vazio: falha fechado.
-  [ "$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))))' "$inv")" -gt 0 ] \
+  [ "$(python3 -I -c 'import json,sys; print(len(json.load(open(sys.argv[1]))))' "$inv")" -gt 0 ] \
     || { msg "python: $(rel "$d") declara dependências, mas o inventário veio vazio"; return 1; }
-  python3 "$here/licenses.py" pip --allow "$allow" < "$inv"
+  integridade || return 1
+  python3 -I "$here/licenses.py" pip --allow "$allow" < "$inv"
 }
 
 while IFS= read -r d; do
@@ -335,9 +379,10 @@ done < <(py_dirs)
 go_checar() { # $1 = dir
   local mod
   cd "$1" || return 1
-  export GOWORK=off GOTOOLCHAIN=local
+  export GOWORK=off GOTOOLCHAIN=local CGO_ENABLED=0   # sem cgo: nada de compilador C rodando código do módulo
   mod="$(go list -m)" || { echo "go: 'go list -m' falhou"; return 1; }
   [ -n "$mod" ] || { echo "go: 'go list -m' não retornou o módulo"; return 1; }
+  integridade || return 1
   go run github.com/google/go-licenses/v2@v2.0.1 check ./... \
     --allowed_licenses="${allow//;/,}" --ignore "$mod"
 }
@@ -355,7 +400,7 @@ done < <(achar go.mod)
 # ---------------- Flutter ----------------
 while IFS= read -r ps; do
   d="$(dirname "$ps")"
-  (flutter pub get --directory "$d" >/dev/null && python3 "$here/licenses.py" dart --allow "$allow" "$d") \
+  (flutter pub get --directory "$d" >/dev/null && integridade && python3 -I "$here/licenses.py" dart --allow "$allow" "$d") \
     || { resumo "❌ licença: $(rel "$d") (flutter)"; falhou=1; }
   checados=$((checados+1))
 done < <(achar pubspec.yaml)
