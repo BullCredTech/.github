@@ -566,7 +566,7 @@ walk_fixture() {
   [ "$status" -ne 0 ]
 }
 
-@test "python: só wheels; sdist não é construído (nada do repo/pacote executa) e a mensagem explica" {
+@test "python: so wheels, sdist nao e construido (nada executa) e a mensagem explica" {
   mkdir -p "$REPO/svc" "$SHIMS/idx/foo-1.0"
   marker="$REPO/EXECUTOU"
   printf 'from setuptools import setup\nopen("%s", "w").write("x")\nsetup(name="foo", version="1.0")\n' "$marker" > "$SHIMS/idx/foo-1.0/setup.py"
