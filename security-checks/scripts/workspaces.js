@@ -15,8 +15,19 @@ const path = require('path');
 class Falha extends Error {}
 const falha = (m) => { throw new Falha(m); };
 
+// ÚNICO ponto que junta caminhos aqui. `relativo` é uma constante ('package.json') ou um `location` vindo
+// do npm query / yarn info: relativo, sem NUL e sem segmento `..`. (A contenção dentro do repo também é
+// conferida no license.sh, por realpath.)
+function juntar(base, relativo) {
+  if (typeof relativo !== 'string' || relativo === '' || relativo.includes('\0') || path.isAbsolute(relativo)
+      || relativo.split(/[/\\]/).includes('..')) {
+    throw new Falha(`caminho inválido: ${JSON.stringify(relativo)}`);
+  }
+  return path.join(base, relativo); // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal -- relativo validado acima (sem absoluto, sem ..) e contenção checada no license.sh
+}
+
 function lerPkg(d) {
-  const f = path.join(d, 'package.json');
+  const f = juntar(d, 'package.json');
   let txt;
   try { txt = fs.readFileSync(f, 'utf8'); } catch (e) { return falha(`não consegui ler ${f}`); }
   let j;
@@ -49,13 +60,13 @@ function main() {
     falha('uso: workspaces.js declared|npmdirs|yarndirs|hasdeps <dir>...');
   }
   if (modo === 'declared') {
-    console.log(declarados(lerPkg(raiz), path.join(raiz, 'package.json')) ? 'true' : 'false');
+    console.log(declarados(lerPkg(raiz), juntar(raiz, 'package.json')) ? 'true' : 'false');
   } else if (modo === 'npmdirs') {
     const arr = pegaJson(lerStdin(), '[', ']');
     if (!Array.isArray(arr)) falha('npm query não retornou uma lista');
     arr.forEach((w) => {
       // `location` (relativo à raiz do projeto) é mais confiável que `path`; este vira reserva.
-      const p = w && (typeof w.location === 'string' ? path.join(raiz, w.location) : (typeof w.path === 'string' ? w.path : null));
+      const p = w && (typeof w.location === 'string' ? juntar(raiz, w.location) : (typeof w.path === 'string' ? w.path : null));
       if (!p) falha('item do npm query sem path');
       console.log(p);
     });
@@ -63,7 +74,7 @@ function main() {
     const obj = pegaJson(lerStdin(), '{', '}');
     Object.keys(obj).forEach((k) => {
       if (!obj[k] || typeof obj[k].location !== 'string') falha(`workspace ${k} sem location`);
-      console.log(path.join(raiz, obj[k].location));
+      console.log(juntar(raiz, obj[k].location));
     });
   } else {
     const pkgs = [raiz, ...resto].map(lerPkg);

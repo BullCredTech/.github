@@ -363,7 +363,9 @@ py_checar() { # $1 = dir do projeto, $2 = dir temporário (já criado)
   # Inventário SEM executar nada do venv: o interpretador do sistema com -I -S lê só os metadados
   # (.dist-info) do site-packages; um .pth de wheel não é processado.
   sp=("$tmpd"/venv/lib/python3*/site-packages)
-  [ "${#sp[@]}" -eq 1 ] && [ -d "${sp[0]}" ] || { msg "python: não achei o site-packages do ambiente"; return 1; }
+  if [ "${#sp[@]}" -ne 1 ] || [ ! -d "${sp[0]}" ]; then
+    msg "python: não achei o site-packages do ambiente"; return 1
+  fi
   inv="$tmpd/inv.json"
   "$SYS_PY" -I -S "$here/licenses.py" site "${sp[0]}" > "$inv" || return 1
   # Declarou dependências e o inventário veio vazio: falha fechado.

@@ -35,6 +35,15 @@ while (args.length) {
 }
 if (!raiz) { console.error('uso: npmwalk.js <raiz> [--min N] [--expect dir...]'); process.exit(2); }
 
+// ÚNICO ponto que junta caminhos aqui. `nome` é um nome de entrada de diretório (vem do readdir) ou uma
+// constante ('node_modules', 'package.json'); qualquer coisa que possa sair de `base` é recusada.
+function juntar(base, nome) {
+  if (typeof nome !== 'string' || nome === '' || nome === '.' || nome === '..' || /[/\\\0]/.test(nome)) {
+    throw new Error(`nome de entrada inválido: ${JSON.stringify(nome)}`);
+  }
+  return path.join(base, nome); // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal -- nomes validados acima (readdir/constantes); contenção checada no license.sh
+}
+
 const erros = [];
 // Rótulo de caminho para mensagens: relativo à raiz do repo; fora dele, a partir do último node_modules/.
 function rotulo(p, nome) {
@@ -48,7 +57,7 @@ function rotulo(p, nome) {
   return `<fora do repo>/${nome || path.basename(p)}`;
 }
 
-let raizReal = path.resolve(raiz);
+let raizReal = raiz; // até o realpath abaixo; só serve para rotular mensagens
 try { raizReal = fs.realpathSync(raiz); } catch (e) { console.error('npmwalk: raiz inexistente'); process.exit(1); }
 
 const visitados = new Set();
@@ -80,7 +89,7 @@ function licenca(pj, dir) {
   let texto = '';
   try {
     const nome = fs.readdirSync(dir).sort().find((n) => ARQUIVOS_LICENCA.has(n.toLowerCase()));
-    if (nome) texto = fs.readFileSync(path.join(dir, nome), 'utf8').slice(0, 4000);
+    if (nome) texto = fs.readFileSync(juntar(dir, nome), 'utf8').slice(0, 4000);
   } catch (e) { /* sem arquivo */ }
   return { License: '', LicenseText: texto };
 }
@@ -94,11 +103,11 @@ function percorrer(nm) {
   try { nomes = fs.readdirSync(nm).sort(); } catch (e) { erros.push(`não consegui listar ${rotulo(nm)}`); return; }
   for (const n of nomes) {
     if (n.startsWith('.')) continue; // .bin, .cache, .package-lock.json, .yarn-integrity...
-    const p = path.join(nm, n);
+    const p = juntar(nm, n);
     if (n.startsWith('@')) {
       let subs;
       try { subs = fs.readdirSync(p).sort(); } catch (e) { continue; }
-      subs.filter((s) => !s.startsWith('.')).forEach((s) => pacote(path.join(p, s)));
+      subs.filter((s) => !s.startsWith('.')).forEach((s) => pacote(juntar(p, s)));
     } else {
       pacote(p);
     }
@@ -114,26 +123,30 @@ function pacote(p) {
   const { dentro, rel } = relativo(real);
   if (proprios.has(real)) {
     ligados.add(real);                         // a raiz ou um workspace informado
-    percorrer(path.join(real, 'node_modules')); // mas as deps não içadas dele valem
+    percorrer(juntar(real, 'node_modules')); // mas as deps não içadas dele valem
     return;
   }
   let pj;
-  try { pj = JSON.parse(fs.readFileSync(path.join(real, 'package.json'), 'utf8')); } catch (e) {
+  try { pj = JSON.parse(fs.readFileSync(juntar(real, 'package.json'), 'utf8')); } catch (e) {
     erros.push(`package.json ilegível em ${rotulo(p)}`); return;
   }
   if (!pj || typeof pj !== 'object') { erros.push(`package.json inválido em ${rotulo(p)}`); return; }
   const nome = pj.name || path.basename(p);
   const versao = pj.version || '?';
   const caminho = rotulo(real, nome);
-  if (!pacotes.has(real)) pacotes.set(real, Object.assign({ Name: nome, Version: versao, Path: caminho }, licenca(pj, real)));
-  percorrer(path.join(real, 'node_modules'));
+  if (!pacotes.has(real)) {
+    const lic = licenca(pj, real);
+    // objeto montado campo a campo (nada de copiar propriedades vindas do package.json)
+    pacotes.set(real, { Name: nome, Version: versao, Path: caminho, License: lic.License, LicenseText: lic.LicenseText });
+  }
+  percorrer(juntar(real, 'node_modules'));
 }
 
-percorrer(path.join(raizReal, 'node_modules'));
+try { percorrer(juntar(raizReal, 'node_modules')); } catch (e) { erros.push(e.message); }
 
 for (const e of esperados) {
   let real;
-  try { real = fs.realpathSync(e); } catch (x) { erros.push(`workspace inexistente: ${rotulo(path.resolve(e))}`); continue; }
+  try { real = fs.realpathSync(e); } catch (x) { erros.push(`workspace inexistente: ${rotulo(e)}`); continue; }
   if (!ligados.has(real)) erros.push(`workspace não instalado em node_modules: ${rotulo(real)}`);
 }
 if (pacotes.size < min) erros.push(`esperava ao menos ${min} pacote(s) instalado(s) e achei ${pacotes.size}`);

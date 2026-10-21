@@ -35,7 +35,9 @@ n_ctl=$(q '[.. | select(tag == "!!map") | keys | .[] | select(test("[[:cntrl:]]"
 
 # Tipos
 [ "$(q 'tag')" = "!!map" ] || erro "a raiz precisa ser um mapa"
-[ "$(q '.version | tag')" = "!!int" ] && [ "$(q '.version')" = "1" ] || erro "version precisa ser o inteiro 1"
+if [ "$(q '.version | tag')" != "!!int" ] || [ "$(q '.version')" != "1" ]; then
+  erro "version precisa ser o inteiro 1"
+fi
 
 for p in license semgrep; do
   [ "$(q ".$p == null or (.$p | tag) == \"!!map\"")" = "true" ] || erro "$p precisa ser um mapa"
