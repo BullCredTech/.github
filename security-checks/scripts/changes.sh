@@ -6,7 +6,7 @@
 #
 # Um arquivo só é documentação se a extensão está na lista abaixo (sem diferenciar maiúsculas)
 # E (está em docs/, ou num diretório extra, ou termina em .md em qualquer lugar).
-# Nunca é documentação: requirements*.txt, constraints*.txt, gitlinks (submódulos), .mdx.
+# Nunca é documentação: *requirements*.txt, *constraints*.txt, gitlinks (submódulos), symlinks, .mdx.
 set -euo pipefail
 
 root="${1:?}"; base="${2:?}"; head="${3:?}"; extra="${4:-}"
@@ -45,7 +45,7 @@ casa_docs() {
   local arq="$1" nome ext
   nome=$(minusculo "${arq##*/}")
   case "$nome" in
-    requirements*.txt|constraints*.txt) return 1 ;;
+    *requirements*.txt|*constraints*.txt) return 1 ;;
   esac
   [[ "$nome" == *.* ]] || return 1
   ext="${nome##*.}"
@@ -67,7 +67,7 @@ visto=false
 while IFS= read -r -d '' meta && IFS= read -r -d '' a; do
   visto=true
   read -r om nm _ <<< "${meta#:}"
-  if [ "$om" = 160000 ] || [ "$nm" = 160000 ]; then echo "docs_only=false"; exit 0; fi
+  if [ "$om" = 160000 ] || [ "$nm" = 160000 ] || [ "$om" = 120000 ] || [ "$nm" = 120000 ]; then echo "docs_only=false"; exit 0; fi
   casa_docs "$a" || { echo "docs_only=false"; exit 0; }
 done < "$tmp"
 

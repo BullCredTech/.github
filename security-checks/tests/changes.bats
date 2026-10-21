@@ -123,3 +123,19 @@ commit() { git add -A; git commit -qm c; HEAD_SHA=$(git rev-parse HEAD); }
   [ "$status" -ne 0 ]
   [ ! -e "$REPO/pwned" ]
 }
+
+@test "variação de requirements/constraints em docs/ é código" {
+  echo z > docs/doc-requirements.txt; commit
+  run bash "$SCRIPT" "$REPO" "$BASE" "$HEAD_SHA" ""
+  [ "$status" -eq 0 ]; [[ "$output" == *"docs_only=false"* ]]
+  git reset -q --hard "$BASE"; mkdir -p docs
+  echo z > docs/My-Constraints.TXT; commit
+  run bash "$SCRIPT" "$REPO" "$BASE" "$HEAD_SHA" ""
+  [[ "$output" == *"docs_only=false"* ]]
+}
+
+@test "symlink docs/link.md conta como código" {
+  ln -s ../src/app.js docs/link.md; commit
+  run bash "$SCRIPT" "$REPO" "$BASE" "$HEAD_SHA" ""
+  [ "$status" -eq 0 ]; [[ "$output" == *"docs_only=false"* ]]
+}
