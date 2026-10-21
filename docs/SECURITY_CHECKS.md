@@ -102,7 +102,7 @@ Para uma exceção válida para toda a organização (por exemplo, uma licença 
 
 ## 7. Verificação de licenças
 
-Lista permitida por padrão (SPDX): `MIT`, `Apache-2.0`, `BSD-2-Clause`, `BSD-3-Clause`, `ISC`, `0BSD`, `CC0-1.0`, `Unlicense`, `BlueOak-1.0.0`, `Python-2.0`. Licenças adicionais por repo entram em `license.extra_allowed`.
+Lista permitida por padrão (SPDX): `MIT`, `Apache-2.0`, `BSD-2-Clause`, `BSD-3-Clause`, `ISC`, `0BSD`, `CC0-1.0`, `Unlicense`, `BlueOak-1.0.0`, `Python-2.0`, `MIT-0`, `MIT-CMU`, `Zlib`, `PSF-2.0`. Licenças adicionais por repo, como a `MPL-2.0` (copyleft por arquivo), entram em `license.extra_allowed`.
 
 Em licenças compostas, **todo termo** (`AND` e `OR`) precisa estar permitido: é conservador de propósito. Cada subprojeto do repo é verificado (monorepos têm vários); `node_modules`, `.git`, ambientes virtuais e caches de Terraform são ignorados, mas `build/` e `dist/` **não**.
 
