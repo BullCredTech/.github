@@ -225,3 +225,11 @@ test('workflow changelog.yml carrega o gate.js que existe, no checkout .changelo
   assert.doesNotMatch(wf, /pull_request_review/, 'o gate não lê reviews');
   assert.ok(fs.existsSync(path.join(root, 'scripts/changelog/gate.js')));
 });
+
+test('docsPrRef: aceita URL e atalho do repo de docs, recusa outro repo', () => {
+  const repo = 'BullCredTech/bull-api-docs-gitbook';
+  assert.equal(gate.docsPrRef('https://github.com/BullCredTech/bull-api-docs-gitbook/pull/22', repo), 22);
+  assert.equal(gate.docsPrRef('ver bullcredtech/BULL-API-DOCS-GITBOOK#7', repo), 7);
+  assert.equal(gate.docsPrRef('https://github.com/BullCredTech/bull-module-proposals/pull/200', repo), null);
+  assert.equal(gate.docsPrRef('BullCredTech/outro#3', repo), null);
+});

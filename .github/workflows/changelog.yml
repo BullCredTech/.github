@@ -31,7 +31,7 @@ jobs:
       # Roda no contexto do repo alvo: os scripts vêm do BullCredTech/.github (público) no mesmo
       # commit deste workflow, então gate e workflow nunca ficam fora de sincronia.
       - name: Baixa os scripts do changelog (BullCredTech/.github)
-        uses: actions/checkout@v4
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           repository: BullCredTech/.github
           ref: ${{ github.workflow_sha }}
@@ -40,7 +40,7 @@ jobs:
           persist-credentials: false
 
       - name: Avalia labels e campos do PR
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
         with:
           script: |
             const gate = require(`${process.env.GITHUB_WORKSPACE}/.changelog-bot/scripts/changelog/gate.js`);

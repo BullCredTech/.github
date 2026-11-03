@@ -10,7 +10,7 @@
 // a flag no changes-api, ou anexa o PR à mudança viva que já tem a flag.
 
 const taxonomy = require('./taxonomy');
-const { parseFields, escapeRe } = require('./fields');
+const { parseFields } = require('./fields');
 const defaultConfig = require('./config.json');
 
 const DOC_URL = 'https://github.com/BullCredTech/.github/blob/main/docs/CHANGELOG_TECH.md';
@@ -36,11 +36,13 @@ function axisErrors(found, keys, prefix, axisName) {
 /** Aceita a URL do PR ou a forma curta owner/repo#N, desde que seja no repo de docs. */
 function docsPrRef(value, docsRepo) {
   if (!value) return null;
-  const repo = escapeRe(docsRepo);
-  const url = new RegExp(`https?://github\\.com/${repo}/pull/(\\d+)`, 'i').exec(value);
-  if (url) return Number(url[1]);
-  const short = new RegExp(`(?:^|\\s)${repo}#(\\d+)`, 'i').exec(value);
-  return short ? Number(short[1]) : null;
+  // Regex literais + comparação do repo como texto (sem RegExp() dinâmico, bloqueado pelo Semgrep).
+  const want = String(docsRepo).toLowerCase();
+  const url = /https?:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)/i.exec(value);
+  if (url && url[1].toLowerCase() === want) return Number(url[2]);
+  const short = /(?:^|\s)([\w.-]+\/[\w.-]+)#(\d+)/i.exec(value);
+  if (short && short[1].toLowerCase() === want) return Number(short[2]);
+  return null;
 }
 
 /** Lembrete do log de sucesso de um breaking: o merge não comunica nada ao parceiro sozinho. */

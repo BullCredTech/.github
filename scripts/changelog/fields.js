@@ -12,21 +12,16 @@ const FIELD_NAMES = {
   docs: 'Docs',
 };
 
-function escapeRe(s) {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
 // Uma linha "Nome: valor", tolerando lista ("- ") e negrito ("**Nome:**").
 // ATENÇÃO: só [ \t] entre os dois-pontos e o valor. Com \s, um campo vazio do template
 // ("Changelog:" seguido de "Parceiro:" na linha de baixo) capturaria a linha seguinte.
-function fieldRe(name) {
-  return new RegExp(
-    `^[ \\t]*(?:[-*][ \\t]+)?(?:\\*\\*)?${escapeRe(name)}(?:\\*\\*)?[ \\t]*:(?:\\*\\*)?[ \\t]*(.*)$`,
-    'im',
-  );
-}
-
-const FIELD_RES = Object.fromEntries(Object.entries(FIELD_NAMES).map(([k, name]) => [k, fieldRe(name)]));
+// Regex literais (uma por campo), sem RegExp() dinâmico: o Semgrep da org bloqueia regex montada.
+const FIELD_RES = {
+  changelog: /^[ \t]*(?:[-*][ \t]+)?(?:\*\*)?Changelog(?:\*\*)?[ \t]*:(?:\*\*)?[ \t]*(.*)$/im,
+  parceiro: /^[ \t]*(?:[-*][ \t]+)?(?:\*\*)?Parceiro(?:\*\*)?[ \t]*:(?:\*\*)?[ \t]*(.*)$/im,
+  flag: /^[ \t]*(?:[-*][ \t]+)?(?:\*\*)?Flag(?:\*\*)?[ \t]*:(?:\*\*)?[ \t]*(.*)$/im,
+  docs: /^[ \t]*(?:[-*][ \t]+)?(?:\*\*)?Docs(?:\*\*)?[ \t]*:(?:\*\*)?[ \t]*(.*)$/im,
+};
 
 /** Remove comentários HTML (o template explica os campos dentro de <!-- -->) e normaliza quebras. */
 function cleanBody(body) {
@@ -75,4 +70,4 @@ function parseBotComment(body) {
   }
 }
 
-module.exports = { BOT_MARKER, FIELD_NAMES, escapeRe, parseFields, cleanBody, findBotComment, parseBotComment };
+module.exports = { BOT_MARKER, FIELD_NAMES, parseFields, cleanBody, findBotComment, parseBotComment };
