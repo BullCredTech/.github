@@ -1,0 +1,27 @@
+name: changelog-tests
+
+# Testes dos scripts do changelog tech (node --test, sem dependências).
+on:
+  pull_request:
+    paths:
+      - 'scripts/changelog/**'
+      - '.github/workflows/changelog*.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Testes
+        run: node --test scripts/changelog/test/*.test.js
