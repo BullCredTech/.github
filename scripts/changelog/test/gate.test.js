@@ -137,6 +137,16 @@ function ctx(number = 7, eventName = 'pull_request') {
   return { eventName, repo: { owner: 'BullCredTech', repo: 'bull-module-proposals' }, payload: { pull_request: { number, labels: [] } } };
 }
 
+test('run: repo fora do piloto passa sem ler o PR', async () => {
+  const github = fakeOctokit({});
+  const core = fakeCore();
+  const context = { eventName: 'pull_request', repo: { owner: 'BullCredTech', repo: '.github' }, payload: { pull_request: { number: 9, labels: [] } } };
+  await gate.run({ github, context, core, config: CONFIG });
+  assert.equal(core.failed, null);
+  assert.equal(github.calls.length, 0);
+  assert.match(core.infos.join('\n'), /não está no piloto/);
+});
+
 test('run: relê o PR na API (labels atuais, não as do payload) e passa', async () => {
   const github = fakeOctokit({
     'GET /repos/{owner}/{repo}/pulls/{pull_number}': () => prFixture({ labels: ['cl:fix', 'partner:none'] }),

@@ -101,6 +101,13 @@ async function run({ github, context, core, config = defaultConfig }) {
   }
   const { owner, repo } = context.repo;
 
+  // O ruleset escolhe os repos, mas o workflow também roda no próprio .github e em qualquer repo
+  // que entre no ruleset antes do config.json: fora do piloto, o gate não cobra nada.
+  if (!config.repos.includes(repo)) {
+    core.info(`changelog-gate: ${owner}/${repo} não está no piloto (scripts/changelog/config.json). Nada a avaliar.`);
+    return;
+  }
+
   // Relê o PR: num re-run o payload é o do evento original, e as labels/descrição podem ter mudado.
   const { data: pr } = await github.request('GET /repos/{owner}/{repo}/pulls/{pull_number}', {
     owner,
