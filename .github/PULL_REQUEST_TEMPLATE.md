@@ -21,6 +21,24 @@
 - [ ] `docs` — documentação apenas
 - [ ] `hotfix` — correção urgente em produção
 
+## Changelog
+
+<!--
+Campos lidos pelo changelog tech (docs/CHANGELOG_TECH.md no repo BullCredTech/.github).
+Deixe em branco o que não se aplica, mas mantenha cada campo na sua linha.
+- Changelog: uma frase para o time interno sobre o que muda. Em branco, o digest usa o resumo do classificador ou o título.
+- Parceiro: frase para o parceiro. Só quando a label for partner:additive ou partner:breaking.
+- Flag: chave da feature flag que liga a mudança, no formato <superfície>.<recurso>.<mudança> (ex.: api.contracts.remove_bank_code). Obrigatório com partner:breaking, e a chave tem de aparecer no código do PR.
+- Docs: link do PR em BullCredTech/bull-api-docs-gitbook. Obrigatório com partner:breaking.
+As labels cl:* (tipo) e partner:* (impacto no parceiro) vêm do classificador ou de quem abre o PR.
+O check changelog-gate exige uma de cada e, com partner:breaking, Flag e Docs. A revisão normal do PR aprova; o parceiro só fica sabendo quando alguém Anunciar no BMS.
+-->
+
+Changelog:
+Parceiro:
+Flag:
+Docs:
+
 ## Checklist
 
 - [ ] Build / lint / testes passam localmente
