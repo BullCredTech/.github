@@ -15,7 +15,7 @@ const CONFIG = {
   docsRepo: 'BullCredTech/bull-api-docs-gitbook',
 };
 const DOCS = 'https://github.com/BullCredTech/bull-api-docs-gitbook/pull/42';
-const BREAKING_BODY = `## Summary\n\n- muda o contrato\n\nChangelog: remove o campo legado\nParceiro: o campo X deixa de vir\nFlag: api.remove_campo_x\nDocs: ${DOCS}\n`;
+const BREAKING_BODY = `## Summary\n\n- muda o contrato\n\nChangelog: remove o campo legado\nParceiro: o campo X deixa de vir\nFlag: api.campo_x.remove\nDocs: ${DOCS}\n`;
 
 function evaluate(over) {
   return gate.evaluate({ labels: [], body: '', config: CONFIG, ...over });
@@ -85,20 +85,70 @@ test('breaking sem Docs, ou com Docs que não é PR do repo de docs', () => {
   assert.deepEqual(r.errors, []);
 });
 
-test('breaking sem Flag, ou com Flag fora do formato api.<nome>', () => {
+test('breaking sem Flag, ou com Flag fora do formato <superfície>.<recurso>.<mudança>', () => {
   const semFlag = BREAKING_BODY.replace(/^Flag:.*$/m, 'Flag:');
   let r = evaluate({ labels: ['cl:feat', 'partner:breaking'], body: semFlag });
   assert.equal(r.errors.length, 1);
   assert.match(r.errors[0], /exige o campo `Flag:`/);
 
   // `-` fica de fora: o changes-api recusa (CHECK em flag_rules.key) e a ponte quebraria no merge.
-  for (const flag of ['sdk.otp_disabled', 'api.', 'API.Campo', 'api.campo x', 'api.campo-x', 'api..x', 'api']) {
-    r = evaluate({ labels: ['cl:feat', 'partner:breaking'], body: BREAKING_BODY.replace('api.remove_campo_x', flag) });
+  for (const flag of ['sdk.otp.disabled', 'api.', 'API.Campo.x', 'api.campo x.y', 'api.campo-x.remove', 'api..x', 'api', 'api.so_duas_partes', 'webhook.status']) {
+    r = evaluate({ labels: ['cl:feat', 'partner:breaking'], body: BREAKING_BODY.replace('api.campo_x.remove', flag) });
     assert.equal(r.errors.length, 1, flag);
-    assert.match(r.errors[0], /formato `api.<nome>`/);
+    assert.match(r.errors[0], /formato `<superfície>\.<recurso>\.<mudança>`/);
   }
   // Crase em volta da chave é tolerada.
-  r = evaluate({ labels: ['cl:feat', 'partner:breaking'], body: BREAKING_BODY.replace('api.remove_campo_x', '`api.remove_campo_x`') });
+  r = evaluate({ labels: ['cl:feat', 'partner:breaking'], body: BREAKING_BODY.replace('api.campo_x.remove', '`api.campo_x.remove`') });
+  assert.deepEqual(r.errors, []);
+  for (const flag of ['api.contracts.remove_bank_code', 'webhook.proposal_status.new_payload', 'api.simulate.amount.strict']) {
+    r = evaluate({ labels: ['cl:feat', 'partner:breaking'], body: BREAKING_BODY.replace('api.campo_x.remove', flag) });
+    assert.deepEqual(r.errors, [], flag);
+  }
+});
+
+const USES_FLAG = { filename: 'apis/proposals-api/src/simulate/simulate.service.ts', patch: "@@ -1 +1,2 @@\n+if (this.featureFlags.isEnabled('api.campo_x.remove', origin.code)) {\n context" };
+
+test('breaking: a chave da Flag tem de aparecer nas linhas adicionadas do código', () => {
+  const labels = ['cl:feat', 'partner:breaking'];
+  let r = evaluate({ labels, body: BREAKING_BODY, files: [USES_FLAG] });
+  assert.deepEqual(r.errors, []);
+  assert.match(r.notes.join('\n'), /aparece no código alterado: `apis\/proposals-api\/src\/simulate\/simulate\.service\.ts`/);
+
+  // Decorator e aspas duplas também valem.
+  r = evaluate({ labels, body: BREAKING_BODY, files: [{ filename: 'src/a.controller.ts', patch: '+@PartnerFlags("api.campo_x.remove")' }] });
+  assert.deepEqual(r.errors, []);
+
+  // Não aparece em lugar nenhum.
+  r = evaluate({ labels, body: BREAKING_BODY, files: [{ filename: 'src/a.ts', patch: '+const x = 1;' }] });
+  assert.equal(r.errors.length, 1);
+  assert.match(r.errors[0], /não aparece no código alterado/);
+  assert.match(r.errors[0], /isEnabled\('api\.campo_x\.remove', origem\)/);
+
+  // Só em linha removida, em teste, em .md ou em docs/ não conta.
+  for (const f of [
+    { filename: 'src/a.ts', patch: "-isEnabled('api.campo_x.remove')" },
+    { filename: 'src/a.spec.ts', patch: "+isEnabled('api.campo_x.remove')" },
+    { filename: 'test/a.e2e.ts', patch: "+isEnabled('api.campo_x.remove')" },
+    { filename: 'docs/SCHEDULED.md', patch: "+`api.campo_x.remove`" },
+    { filename: 'README.md', patch: "+'api.campo_x.remove'" },
+  ]) {
+    r = evaluate({ labels, body: BREAKING_BODY, files: [f] });
+    assert.equal(r.errors.length, 1, f.filename);
+  }
+
+  // Chave como prefixo de outra não conta (precisa estar entre aspas inteira).
+  r = evaluate({ labels, body: BREAKING_BODY, files: [{ filename: 'src/a.ts', patch: "+isEnabled('api.campo_x.remove_v2')" }] });
+  assert.equal(r.errors.length, 1);
+});
+
+test('breaking: arquivo sem diff visível pela API entra na mensagem', () => {
+  const r = evaluate({ labels: ['cl:feat', 'partner:breaking'], body: BREAKING_BODY, files: [{ filename: 'src/enorme.ts' }] });
+  assert.equal(r.errors.length, 1);
+  assert.match(r.errors[0], /não mostrou o diff de 1 arquivo\(s\) grande\(s\) \(`src\/enorme\.ts`\)/);
+});
+
+test('sem breaking, o diff não é avaliado', () => {
+  const r = evaluate({ labels: ['cl:feat', 'partner:additive'], body: 'Parceiro: campo novo', files: [] });
   assert.deepEqual(r.errors, []);
 });
 
@@ -170,15 +220,20 @@ test('run: falha com a lista de pendências e o link do doc', async () => {
 test('run: breaking com Flag e Docs passa sem buscar reviews e lembra do Anunciar no BMS', async () => {
   const github = fakeOctokit({
     'GET /repos/{owner}/{repo}/pulls/{pull_number}': () => prFixture({ labels: ['cl:feat', 'partner:breaking'], body: BREAKING_BODY }),
+    'GET /repos/{owner}/{repo}/pulls/{pull_number}/files': () => [USES_FLAG],
   });
   const core = fakeCore();
   await gate.run({ github, context: ctx(), core, config: CONFIG });
   assert.equal(core.failed, null);
-  assert.deepEqual(github.calls.map((c) => c.route), ['GET /repos/{owner}/{repo}/pulls/{pull_number}']);
+  assert.deepEqual(github.calls.map((c) => c.route), [
+    'GET /repos/{owner}/{repo}/pulls/{pull_number}',
+    'GET /repos/{owner}/{repo}/pulls/{pull_number}/files',
+  ]);
+  assert.equal(github.calls[1].params.pull_number, 7);
   assert.match(core.infos.join('\n'), /OK — PR #7 com cl:feat \+ partner:breaking/);
   assert.equal(core.notices.length, 1);
   assert.match(core.notices[0], /só chega ao parceiro quando alguém clicar em Anunciar no BMS/);
-  assert.match(core.notices[0], /`api\.remove_campo_x`/);
+  assert.match(core.notices[0], /`api\.campo_x\.remove`/);
 });
 
 test('run: sem breaking, nenhum lembrete de anúncio', async () => {
@@ -194,6 +249,7 @@ test('run: sem breaking, nenhum lembrete de anúncio', async () => {
 test('run: breaking sem Flag nem Docs falha e não lembra do anúncio', async () => {
   const github = fakeOctokit({
     'GET /repos/{owner}/{repo}/pulls/{pull_number}': () => prFixture({ labels: ['cl:feat', 'partner:breaking'], body: TEMPLATE_BODY }),
+    'GET /repos/{owner}/{repo}/pulls/{pull_number}/files': () => [],
   });
   const core = fakeCore();
   await gate.run({ github, context: ctx(), core, config: CONFIG });

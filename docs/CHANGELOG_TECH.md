@@ -27,7 +27,8 @@ O classificador **sugere**. Quem **bloqueia** é sempre uma regra determinístic
 | Exige uma label `cl:*` e uma `partner:*` em todo PR para `main` | Não classifica nem aplica labels: isso é do classificador ou de quem abre o PR |
 | Em `partner:breaking`, exige `Flag:` e `Docs:` | Não exige aprovação própria: vale a revisão normal do PR |
 | Posta o digest diário e o semanal no Slack | Não olha data: a vigência vive no registro de mudanças programadas |
-| Lê o `summary` do comentário do classificador | Não verifica se a flag existe: no merge, a [ponte](#a-ponte-changelog-bridge) cria a mudança programada com ela |
+| Em `partner:breaking`, confere que a chave de `Flag:` aparece no código alterado pelo PR | Não verifica se a flag existe no changes-api: no merge, a [ponte](#a-ponte-changelog-bridge) cria a mudança programada com ela |
+| Lê o `summary` do comentário do classificador | |
 | | Não cria a mudança programada (é da ponte) e não publica o /changelog (é do sync no `bull-api-docs-gitbook`, depois do anúncio no BMS) |
 
 ### Repos do piloto
@@ -102,7 +103,7 @@ Docs:
 |---|---|---|---|
 | `Changelog:` | não | uma frase para o time interno | digest. Vazio: usa o `summary` do classificador ou, sem ele, o título |
 | `Parceiro:` | não. Sem ele com `additive`/`breaking`, o gate só anota | frase para o parceiro | etapas seguintes (/changelog, mudança programada) |
-| `Flag:` | **sim, com `partner:breaking`** | `api.<nome>`: minúsculas, dígitos, `_` e `.` (ex.: `api.remove_campo_legado`). É o formato de chave do changes-api; hífen não vale | gate e ponte |
+| `Flag:` | **sim, com `partner:breaking`** | `<superfície>.<recurso>.<mudança>` (ver [Nome da flag](#nome-da-flag)), ex.: `api.contracts.remove_bank_code` | gate e ponte |
 | `Docs:` | **sim, com `partner:breaking`** | link do PR em `BullCredTech/bull-api-docs-gitbook` (URL ou `BullCredTech/bull-api-docs-gitbook#123`) | gate |
 
 Regras de leitura:
@@ -116,7 +117,7 @@ Exemplo de PR breaking preenchido:
 ```
 Changelog: GET /contracts deixa de devolver o campo legado `bank_code`
 Parceiro: O campo `bank_code` sai da resposta de GET /contracts; use `bank.code`.
-Flag: api.contracts_remove_bank_code
+Flag: api.contracts.remove_bank_code
 Docs: https://github.com/BullCredTech/bull-api-docs-gitbook/pull/123
 ```
 
@@ -126,6 +127,22 @@ Docs: https://github.com/BullCredTech/bull-api-docs-gitbook/pull/123
 - `bull-module-auction/.github/pull_request_template.md`
 - `bull-module-receivables/.github/pull_request_template.md`
 
+### Nome da flag
+
+Formato: **`<superfície>.<recurso>.<mudança>`**, em minúsculas, com dígitos e `_`; `.` separa as partes e hífen não vale.
+
+| Parte | O que é | Valores |
+|---|---|---|
+| superfície | onde o parceiro sente a mudança | `api` (REST) ou `webhook` (payload que enviamos). O `sdk.*` é do `sdk_feature_flags` e não entra aqui |
+| recurso | o recurso ou evento afetado, no nome que o parceiro conhece | `contracts`, `simulate`, `proposals`, `proposal_status`… |
+| mudança | o que muda, no imperativo curto | `remove_bank_code`, `strict_amount`, `new_payload` |
+
+Exemplos: `api.contracts.remove_bank_code`, `api.simulate.strict_amount`, `webhook.proposal_status.new_payload`. Mais de três partes vale quando ajuda (`api.simulate.amount.strict`).
+
+- A chave é **única** no changes-api. Repetir a mesma chave em outro PR **anexa** esse PR à mesma mudança programada (é o jeito de entregar uma breaking em vários PRs). Por isso, antes de escolher, confira no BMS (Mudanças programadas) se a chave já existe.
+- A chave aparece **no código**, entre aspas: `isEnabled('api.contracts.remove_bank_code', origin.code)` ou `@PartnerFlags('api.contracts.remove_bank_code')`. É o que o gate procura.
+- O classificador sugere uma chave nesse formato quando marca `partner:breaking`.
+
 ## O gate `changelog-gate`
 
 O workflow é `.github/workflows/changelog.yml` e a lógica fica em `scripts/changelog/gate.js`. Ele roda no repo alvo, com o `GITHUB_TOKEN` de lá (`contents: read`, `pull-requests: read`). Os scripts vêm do `BullCredTech/.github`, que é público, no mesmo commit do workflow (`github.workflow_sha`).
@@ -134,10 +151,11 @@ O gate passa quando:
 
 1. há **exatamente uma** label `cl:*` e **exatamente uma** `partner:*`. A mensagem diz o que falta ou o que sobra;
 2. com `partner:breaking`, também:
-   - `Flag:` tem uma chave no formato `api.<nome>`;
+   - `Flag:` tem uma chave no formato [`<superfície>.<recurso>.<mudança>`](#nome-da-flag);
+   - **a chave aparece no código alterado pelo PR**: entre aspas, numa linha adicionada de um arquivo que não é teste nem documentação (ex.: `isEnabled('api.contracts.remove_bank_code', origin.code)` ou `@PartnerFlags('api.contracts.remove_bank_code')`). Declarar `Flag:` sem usar a flag deixaria a breaking change ir direto para produção;
    - `Docs:` aponta para um PR do `BullCredTech/bull-api-docs-gitbook`.
 
-Só isso. O gate **não** exige aprovação própria (a revisão normal do PR basta) e **não** verifica se a flag existe: no merge, a [ponte](#a-ponte-changelog-bridge) cria a mudança programada com essa flag no changes-api, ou anexa o PR à mudança viva que já tem a flag. Até a virada, a flag fica desligada e o código entra sem efeito.
+Só isso. O gate **não** exige aprovação própria (a revisão normal do PR basta) e **não** verifica se a flag existe no changes-api: no merge, a [ponte](#a-ponte-changelog-bridge) cria a mudança programada com essa flag no changes-api, ou anexa o PR à mudança viva que já tem a flag. Até a virada, a flag fica desligada e o código entra sem efeito.
 
 PR com base diferente de `main` (ex.: `staging`) não é avaliado: o gate passa direto. O gate **não olha data**. A vigência de uma breaking change vive no registro de mudanças programadas.
 
@@ -146,7 +164,7 @@ Exemplo de falha:
 ```
 changelog-gate: 2 pendência(s) no PR #212:
 - `partner:breaking` exige o campo `Docs:` na descrição, com o link do PR em BullCredTech/bull-api-docs-gitbook.
-- `partner:breaking` exige o campo `Flag:` na descrição, com a chave da feature flag (formato `api.<nome>`).
+- `partner:breaking` exige o campo `Flag:` na descrição, com a chave da feature flag no formato `<superfície>.<recurso>.<mudança>`, com superfície `api` ou `webhook` (ex.: `api.contracts.remove_bank_code`).
 Como resolver: https://github.com/BullCredTech/.github/blob/main/docs/CHANGELOG_TECH.md
 ```
 
@@ -154,7 +172,7 @@ Num breaking que passa, o gate deixa um *notice* no resumo do check, para ningu�
 
 ```
 changelog-gate: OK — PR #212 com cl:feat + partner:breaking.
-Lembrete: a mudança só chega ao parceiro quando alguém clicar em Anunciar no BMS. No merge, a ponte cria o rascunho da mudança programada da flag `api.contracts_remove_bank_code` (ou anexa este PR à mudança que já tem a flag); até o anúncio, nada vai para o /changelog nem para o parceiro.
+Lembrete: a mudança só chega ao parceiro quando alguém clicar em Anunciar no BMS. No merge, a ponte cria o rascunho da mudança programada da flag `api.contracts.remove_bank_code` (ou anexa este PR à mudança que já tem a flag); até o anúncio, nada vai para o /changelog nem para o parceiro.
 ```
 
 ### Quando o gate roda (importante)
@@ -318,6 +336,8 @@ Use os endpoints de adicionar e remover label (`POST`/`DELETE /repos/{owner}/{re
 | `migration_guide` | string (markdown) | antes e depois, com exemplo de request e response. `""` quando não é breaking |
 | `docs` | array de strings | caminhos no `bull-api-docs-gitbook` que mudam. `[]` se nenhum |
 | `reason` | string | por que essa classificação, com a evidência: arquivos, endpoints, campos |
+| `flag` | string | só em `breaking`: a chave sugerida no formato [`<superfície>.<recurso>.<mudança>`](#nome-da-flag). Se o PR já declara `Flag:`, repita essa. `""` quando não é breaking |
+| `flag_in_code` | boolean | só em `breaking`: se a chave aparece, entre aspas, nas linhas adicionadas de código (fora de teste e doc). Se for `false`, o texto legível explica como embrulhar a mudança na flag (`isEnabled(...)` / `@PartnerFlags(...)`) |
 
 Os campos `type` e `partner` do JSON são a **sugestão**. O que vale para o gate e para o agrupamento são as **labels**. O digest lê só o `summary`. No merge de um breaking, a [ponte](#a-ponte-changelog-bridge) leva `partner_text`, `migration_guide` e `docs` para o rascunho da mudança programada, onde alguém revisa antes de anunciar.
 
@@ -354,13 +374,13 @@ Exemplo, breaking. O texto aponta o que falta para o gate passar:
   "partner": "breaking",
   "summary": "Remove o campo legado bank_code de GET /contracts",
   "partner_text": "O campo `bank_code` sai da resposta de GET /contracts. Use `bank.code`.",
-  "migration_guide": "**Antes:** `{\"bank_code\": \"341\"}`\n**Depois:** `{\"bank\": {\"code\": \"341\"}}`\nTeste em staging com a flag `api.contracts_remove_bank_code` ligada para a sua origem.",
+  "migration_guide": "**Antes:** `{\"bank_code\": \"341\"}`\n**Depois:** `{\"bank\": {\"code\": \"341\"}}`\nTeste em staging com a flag `api.contracts.remove_bank_code` ligada para a sua origem.",
   "docs": ["api-reference/contracts/get-contracts.md"],
   "reason": "Campo removido do DTO de resposta; parceiros que leem bank_code quebram."
 }
 ```
 
-**Tipo:** feat · **Impacto no parceiro:** breaking. Para o merge: `Flag:` (sugestão `api.contracts_remove_bank_code`) e `Docs:` com o PR de doc. O parceiro só fica sabendo quando alguém Anunciar no BMS.
+**Tipo:** feat · **Impacto no parceiro:** breaking. Para o merge: `Flag:` (sugestão `api.contracts.remove_bank_code`) e `Docs:` com o PR de doc. O parceiro só fica sabendo quando alguém Anunciar no BMS.
 ````
 
 Exemplo, sem impacto:

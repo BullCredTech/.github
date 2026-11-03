@@ -6,8 +6,10 @@
 // Não exige aprovação própria: a revisão normal do PR aprova a classificação, e a aprovação voltada
 // ao parceiro acontece no BMS, ao Anunciar.
 // Não olha data: a vigência de uma breaking change vive no registro de mudanças programadas.
-// Não verifica se a flag existe: no merge, a ponte (changelog-bridge) cria a mudança programada com
-// a flag no changes-api, ou anexa o PR à mudança viva que já tem a flag.
+// Não verifica se a flag existe no changes-api: no merge, a ponte (changelog-bridge) cria a mudança
+// programada com a flag, ou anexa o PR à mudança viva que já tem a flag. Mas verifica que a chave
+// aparece no CÓDIGO alterado pelo PR: declarar `Flag:` sem usar a flag deixaria a breaking change
+// ir direto para produção.
 
 const taxonomy = require('./taxonomy');
 const { parseFields } = require('./fields');
@@ -15,11 +17,39 @@ const defaultConfig = require('./config.json');
 
 const DOC_URL = 'https://github.com/BullCredTech/.github/blob/main/docs/CHANGELOG_TECH.md';
 
-// Chave de flag de API: o formato de chave do changes-api (`^[a-z][a-z0-9]*(\.[a-z0-9_]+)+$`,
-// CHECK em flag_rules.key) com o namespace `api`. Aceitar algo fora dele faria a ponte receber 422
-// ao criar a mudança programada no merge. Sem ambiguidade de backtracking: cada repetição começa
-// com "." e "." não está na classe.
-const FLAG_KEY_RE = /^api(?:\.[a-z0-9_]+)+$/;
+// Chave de flag de mudança programada: `<superfície>.<recurso>.<mudança>`, superfície `api` ou
+// `webhook`, partes em minúsculas, dígitos e `_` (ex.: `api.contracts.remove_bank_code`,
+// `webhook.proposal_status.new_payload`). É um subconjunto do formato do changes-api
+// (`^[a-z][a-z0-9]*(\.[a-z0-9_]+)+$`, CHECK em flag_rules.key): aceitar algo fora dele faria a
+// ponte receber 422 no merge. Sem ambiguidade de backtracking: cada parte começa com "." e "."
+// não está na classe.
+const FLAG_KEY_RE = /^(?:api|webhook)\.[a-z0-9_]+\.[a-z0-9_]+(?:\.[a-z0-9_]+)*$/;
+const FLAG_FORMAT = '`<superfície>.<recurso>.<mudança>`, com superfície `api` ou `webhook` (ex.: `api.contracts.remove_bank_code`)';
+
+// Arquivos que não contam como "código que usa a flag": documentação e testes. Uma chave citada só
+// num teste ou num .md não protege o parceiro.
+const NON_CODE_RE = /(?:\.(?:md|mdx|txt)$|(?:^|\/)docs\/|\.(?:spec|test)\.[cm]?[jt]sx?$|(?:^|\/)(?:__tests__|tests?)\/)/i;
+
+/**
+ * Procura a chave da flag, entre aspas, nas linhas ADICIONADAS do diff dos arquivos de código.
+ * files: itens de GET /pulls/{n}/files ({ filename, patch? }). A API omite o patch de arquivo
+ * grande ou binário: esses entram em `unreadable`.
+ */
+function flagUsage(files, key) {
+  const quoted = [`'${key}'`, `"${key}"`, `\`${key}\``];
+  const found = [];
+  const unreadable = [];
+  for (const f of files || []) {
+    if (NON_CODE_RE.test(f.filename)) continue;
+    if (typeof f.patch !== 'string') {
+      unreadable.push(f.filename);
+      continue;
+    }
+    const added = f.patch.split('\n').filter((l) => l.startsWith('+') && !l.startsWith('+++'));
+    if (added.some((l) => quoted.some((q) => l.includes(q)))) found.push(f.filename);
+  }
+  return { found, unreadable };
+}
 
 function list(keys, prefix) {
   return keys.map((k) => `\`${prefix}${k}\``).join(', ');
@@ -56,9 +86,10 @@ function breakingReminder(flagKey) {
 
 /**
  * Avaliação pura. Recebe o estado do PR e devolve { errors, notes }.
+ * files: arquivos do PR (só são necessários em `partner:breaking`; null = não verificar o diff).
  * errors vazio = gate passa.
  */
-function evaluate({ labels, body, config = defaultConfig }) {
+function evaluate({ labels, body, files = null, config = defaultConfig }) {
   const errors = [];
   const notes = [];
 
@@ -82,9 +113,25 @@ function evaluate({ labels, body, config = defaultConfig }) {
     }
 
     if (!fields.flag) {
-      errors.push('`partner:breaking` exige o campo `Flag:` na descrição, com a chave da feature flag (formato `api.<nome>`).');
+      errors.push(`\`partner:breaking\` exige o campo \`Flag:\` na descrição, com a chave da feature flag no formato ${FLAG_FORMAT}.`);
     } else if (!FLAG_KEY_RE.test(fields.flag)) {
-      errors.push(`O campo \`Flag:\` precisa ser uma chave no formato \`api.<nome>\` (recebido: "${fields.flag}").`);
+      errors.push(`O campo \`Flag:\` precisa seguir o formato ${FLAG_FORMAT} (recebido: "${fields.flag}").`);
+    } else if (files !== null) {
+      const { found, unreadable } = flagUsage(files, fields.flag);
+      if (found.length) {
+        notes.push(`A flag \`${fields.flag}\` aparece no código alterado: ${found.map((f) => `\`${f}\``).join(', ')}.`);
+      } else {
+        errors.push(
+          `A flag \`${fields.flag}\` não aparece no código alterado por este PR. Uma breaking change precisa ` +
+            `entrar desligada, atrás da flag: use \`isEnabled('${fields.flag}', origem)\` ou ` +
+            `\`@PartnerFlags('${fields.flag}')\` no código (testes e .md não contam).` +
+            (unreadable.length
+              ? ` A API do GitHub não mostrou o diff de ${unreadable.length} arquivo(s) grande(s) ` +
+                `(${unreadable.slice(0, 5).map((f) => `\`${f}\``).join(', ')}${unreadable.length > 5 ? ', …' : ''}); ` +
+                'se a chave estiver só neles, divida o PR.'
+              : ''),
+        );
+      }
     }
   }
 
@@ -122,7 +169,18 @@ async function run({ github, context, core, config = defaultConfig }) {
     return;
   }
 
-  const result = evaluate({ labels: pr.labels, body: pr.body, config });
+  // O diff só é lido em `partner:breaking`: é onde o gate confere que a flag está no código.
+  const breakingLabel = taxonomy.partnersFromLabels(pr.labels).includes('breaking');
+  const files = breakingLabel
+    ? await github.paginate('GET /repos/{owner}/{repo}/pulls/{pull_number}/files', {
+        owner,
+        repo,
+        pull_number: pr.number,
+        per_page: 100,
+      })
+    : null;
+
+  const result = evaluate({ labels: pr.labels, body: pr.body, files, config });
 
   for (const n of result.notes) core.info(n);
 
@@ -139,4 +197,4 @@ async function run({ github, context, core, config = defaultConfig }) {
   if (result.breaking) core.notice(breakingReminder(result.fields.flag));
 }
 
-module.exports = { evaluate, run, docsPrRef, breakingReminder, FLAG_KEY_RE };
+module.exports = { evaluate, run, docsPrRef, breakingReminder, flagUsage, FLAG_KEY_RE };
