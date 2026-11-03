@@ -1,0 +1,17 @@
+# Allowlist padrão de licenças (SPDX). Um identificador por linha.
+# Licença a mais num repo: `license.extra_allowed` no .github/security-checks.yml dele.
+MIT
+Apache-2.0
+BSD-2-Clause
+BSD-3-Clause
+ISC
+0BSD
+CC0-1.0
+Unlicense
+BlueOak-1.0.0
+Python-2.0
+# Acrescentadas em 21/10/2026 (decisão do CTO): permissivas, já aceitas nas listas próprias do cash-flow e do mobile.
+MIT-0
+MIT-CMU
+Zlib
+PSF-2.0
