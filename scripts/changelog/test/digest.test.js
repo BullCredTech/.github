@@ -11,7 +11,6 @@ const CONFIG = {
   repos: ['bull-module-proposals', 'bull-module-auction'],
   baseBranch: 'main',
   timezone: 'America/Sao_Paulo',
-  partnerApprovers: [],
   docsRepo: 'BullCredTech/bull-api-docs-gitbook',
   digestHour: 9,
 };

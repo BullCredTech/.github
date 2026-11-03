@@ -1,9 +1,13 @@
 'use strict';
 
 // Gate determinístico do changelog tech (check `changelog-gate`).
-// Só LÊ labels, campos da descrição e reviews. Não classifica nem aplica labels: isso é do
-// classificador (ver "Contrato com o classificador" em docs/CHANGELOG_TECH.md).
+// Só LÊ labels e campos da descrição. Não classifica nem aplica labels: isso é do classificador
+// (ver "Contrato com o classificador" em docs/CHANGELOG_TECH.md).
+// Não exige aprovação própria: a revisão normal do PR aprova a classificação, e a aprovação voltada
+// ao parceiro acontece no BMS, ao Anunciar.
 // Não olha data: a vigência de uma breaking change vive no registro de mudanças programadas.
+// Não verifica se a flag existe: no merge, a ponte (changelog-bridge) cria a mudança programada com
+// a flag no changes-api, ou anexa o PR à mudança viva que já tem a flag.
 
 const taxonomy = require('./taxonomy');
 const { parseFields, escapeRe } = require('./fields');
@@ -11,8 +15,11 @@ const defaultConfig = require('./config.json');
 
 const DOC_URL = 'https://github.com/BullCredTech/.github/blob/main/docs/CHANGELOG_TECH.md';
 
-// Chave de flag de API: "api." seguido de minúsculas, dígitos e separadores (. _ -).
-const FLAG_KEY_RE = /^api\.[a-z0-9]+(?:[._-][a-z0-9]+)*$/;
+// Chave de flag de API: o formato de chave do changes-api (`^[a-z][a-z0-9]*(\.[a-z0-9_]+)+$`,
+// CHECK em flag_rules.key) com o namespace `api`. Aceitar algo fora dele faria a ponte receber 422
+// ao criar a mudança programada no merge. Sem ambiguidade de backtracking: cada repetição começa
+// com "." e "." não está na classe.
+const FLAG_KEY_RE = /^api(?:\.[a-z0-9_]+)+$/;
 
 function list(keys, prefix) {
   return keys.map((k) => `\`${prefix}${k}\``).join(', ');
@@ -26,19 +33,6 @@ function axisErrors(found, keys, prefix, axisName) {
   return [`Há ${found.length} labels de ${axisName} (${list(found, prefix)}): deixe só uma.`];
 }
 
-/** Última review de cada aprovador que conta (COMMENTED e PENDING não mudam o estado). */
-function approvalBy(reviews, approvers) {
-  const wanted = new Set(approvers.map((a) => a.toLowerCase()));
-  const lastState = new Map();
-  for (const r of reviews || []) {
-    const login = r && r.user && r.user.login ? r.user.login.toLowerCase() : null;
-    if (!login || !wanted.has(login)) continue;
-    if (r.state === 'COMMENTED' || r.state === 'PENDING') continue;
-    lastState.set(login, { state: r.state, login: r.user.login });
-  }
-  return [...lastState.values()].filter((v) => v.state === 'APPROVED').map((v) => v.login);
-}
-
 /** Aceita a URL do PR ou a forma curta owner/repo#N, desde que seja no repo de docs. */
 function docsPrRef(value, docsRepo) {
   if (!value) return null;
@@ -49,22 +43,20 @@ function docsPrRef(value, docsRepo) {
   return short ? Number(short[1]) : null;
 }
 
-/**
- * TODO(catálogo de flags): verificar que `flagKey` existe no catálogo de feature flags do repo
- * (adicionada neste diff ou já existente). Depende da generalização de `sdk_feature_flags` para
- * `feature_flags` com namespace `api.*` no bull-module-proposals (plano, seção C.1). Até lá o gate
- * só valida o formato da chave. Quando o catálogo existir, implementar aqui e devolver
- * { ok: false, message } se a chave não estiver lá; o resto do gate não muda.
- */
-async function checkFlagInCatalog(/* flagKey, { github, owner, repo, pr } */) {
-  return { ok: true, skipped: true, message: 'verificação no catálogo de flags ainda não implementada (só o formato foi validado)' };
+/** Lembrete do log de sucesso de um breaking: o merge não comunica nada ao parceiro sozinho. */
+function breakingReminder(flagKey) {
+  return (
+    'Lembrete: a mudança só chega ao parceiro quando alguém clicar em Anunciar no BMS. No merge, a ponte cria o ' +
+    `rascunho da mudança programada da flag \`${flagKey}\` (ou anexa este PR à mudança que já tem a flag); ` +
+    'até o anúncio, nada vai para o /changelog nem para o parceiro.'
+  );
 }
 
 /**
  * Avaliação pura. Recebe o estado do PR e devolve { errors, notes }.
  * errors vazio = gate passa.
  */
-function evaluate({ labels, body, reviews, config = defaultConfig }) {
+function evaluate({ labels, body, config = defaultConfig }) {
   const errors = [];
   const notes = [];
 
@@ -80,25 +72,6 @@ function evaluate({ labels, body, reviews, config = defaultConfig }) {
   const breaking = partners.includes('breaking');
 
   if (breaking) {
-    const approvers = config.partnerApprovers || [];
-    if (approvers.length === 0) {
-      errors.push(
-        '`partner:breaking` exige aprovação de parcerias, mas `partnerApprovers` está vazio em ' +
-          '`scripts/changelog/config.json` do BullCredTech/.github. O gate falha fechado até alguém ' +
-          'preencher a lista (PR no repo .github).',
-      );
-    } else {
-      const approvedBy = approvalBy(reviews, approvers);
-      if (approvedBy.length === 0) {
-        errors.push(
-          `\`partner:breaking\` exige aprovação (review "Approve") de um destes: ${approvers.map((a) => `@${a}`).join(', ')}. ` +
-            'Vale a última review de cada um; comentário não conta e aprovação descartada ou seguida de "Request changes" deixa de valer.',
-        );
-      } else {
-        notes.push(`Aprovado para parceiro por ${approvedBy.map((a) => `@${a}`).join(', ')}.`);
-      }
-    }
-
     const docsRepo = config.docsRepo || 'BullCredTech/bull-api-docs-gitbook';
     if (!fields.docs) {
       errors.push(`\`partner:breaking\` exige o campo \`Docs:\` na descrição, com o link do PR em ${docsRepo}.`);
@@ -140,23 +113,7 @@ async function run({ github, context, core, config = defaultConfig }) {
     return;
   }
 
-  const isBreaking = taxonomy.partnersFromLabels(pr.labels).includes('breaking');
-  const reviews = isBreaking
-    ? await github.paginate('GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews', {
-        owner,
-        repo,
-        pull_number: pr.number,
-        per_page: 100,
-      })
-    : [];
-
-  const result = evaluate({ labels: pr.labels, body: pr.body, reviews, config });
-
-  if (isBreaking && result.fields.flag && FLAG_KEY_RE.test(result.fields.flag)) {
-    const flag = await checkFlagInCatalog(result.fields.flag, { github, owner, repo, pr });
-    if (!flag.ok) result.errors.push(flag.message);
-    else if (flag.skipped) result.notes.push(`Flag \`${result.fields.flag}\`: ${flag.message}.`);
-  }
+  const result = evaluate({ labels: pr.labels, body: pr.body, config });
 
   for (const n of result.notes) core.info(n);
 
@@ -169,6 +126,8 @@ async function run({ github, context, core, config = defaultConfig }) {
 
   const labels = taxonomy.labelNames(pr.labels).filter((n) => /^(cl|partner):/i.test(n));
   core.info(`changelog-gate: OK — PR #${pr.number} com ${labels.join(' + ')}.`);
+  // Notice, e não só log: aparece no resumo do check, sem abrir o job.
+  if (result.breaking) core.notice(breakingReminder(result.fields.flag));
 }
 
-module.exports = { evaluate, run, approvalBy, docsPrRef, checkFlagInCatalog, FLAG_KEY_RE };
+module.exports = { evaluate, run, docsPrRef, breakingReminder, FLAG_KEY_RE };

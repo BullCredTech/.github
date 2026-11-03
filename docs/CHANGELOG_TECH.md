@@ -1,6 +1,6 @@
 # Changelog tech
 
-Esse documento descreve a esteira determinística do changelog tech: as labels de cada PR, os campos da descrição, o gate `changelog-gate`, o digest no Slack e o contrato com o agente que classifica os PRs.
+Esse documento descreve a esteira determinística do changelog tech: as labels de cada PR, os campos da descrição, o gate `changelog-gate`, o digest no Slack, a ponte com o registro de mudanças programadas e o contrato com o agente que classifica os PRs.
 
 ## Por que existe
 
@@ -8,23 +8,27 @@ Esse documento descreve a esteira determinística do changelog tech: as labels d
 - Uma mudança que quebra contrato vai direto para produção, e o parceiro descobre pelo erro.
 - O https://docs.bullcredtech.com/changelog está parado desde 05/05/2026.
 
-A solução tem duas camadas:
+A solução tem três camadas, e quase tudo é automático:
 
 | Camada | Quem | O que faz |
 |---|---|---|
 | **Classificador** | um agente LLM (o tech-agent ou o avaliador) | lê o diff e aplica as labels. Também mantém **um** comentário com o resumo e o texto para o parceiro |
 | **Esteira determinística** (este repo) | GitHub Actions, sem LLM | lê as labels, os campos e o comentário, bloqueia o merge quando falta algo e posta o digest |
+| **Ponte `changelog-bridge`** | Lambda no `bull-module-devops`, sem LLM | re-executa o gate quando alguém muda labels, descrição ou reviews e, no merge de um PR breaking, cria o rascunho da mudança programada no changes-api. Veja [A ponte](#a-ponte-changelog-bridge) |
 
 O classificador **sugere**. Quem **bloqueia** é sempre uma regra determinística. A esteira não sabe qual LLM classificou: basta seguir o [contrato](#contrato-com-o-classificador).
+
+**Quem aprova um breaking:** a revisão normal do PR, feita por qualquer pessoa, aprova a classificação. Não há lista de aprovadores. A aprovação voltada ao parceiro acontece no BMS, quando alguém **Anuncia** a mudança programada. Até lá, nada chega ao parceiro nem ao /changelog.
 
 ### O que a esteira faz e o que não faz
 
 | Faz | Não faz |
 |---|---|
 | Exige uma label `cl:*` e uma `partner:*` em todo PR para `main` | Não classifica nem aplica labels: isso é do classificador ou de quem abre o PR |
-| Em `partner:breaking`, exige aprovação de parcerias, `Flag:` e `Docs:` | Não olha data: a vigência vive no registro de mudanças programadas |
-| Posta o digest diário e o semanal no Slack | Não verifica se a flag existe no catálogo (veja o [TODO](#o-gate-changelog-gate)) |
-| Lê o `summary` do comentário do classificador | Não publica o /changelog e não cria a mudança programada no BMS (são as próximas etapas) |
+| Em `partner:breaking`, exige `Flag:` e `Docs:` | Não exige aprovação própria: vale a revisão normal do PR |
+| Posta o digest diário e o semanal no Slack | Não olha data: a vigência vive no registro de mudanças programadas |
+| Lê o `summary` do comentário do classificador | Não verifica se a flag existe: no merge, a [ponte](#a-ponte-changelog-bridge) cria a mudança programada com ela |
+| | Não cria a mudança programada (é da ponte) e não publica o /changelog (é do sync no `bull-api-docs-gitbook`, depois do anúncio no BMS) |
 
 ### Repos do piloto
 
@@ -98,7 +102,7 @@ Docs:
 |---|---|---|---|
 | `Changelog:` | não | uma frase para o time interno | digest. Vazio: usa o `summary` do classificador ou, sem ele, o título |
 | `Parceiro:` | não. Sem ele com `additive`/`breaking`, o gate só anota | frase para o parceiro | etapas seguintes (/changelog, mudança programada) |
-| `Flag:` | **sim, com `partner:breaking`** | `api.<nome>`: minúsculas, dígitos e `.` `_` `-` (ex.: `api.remove_campo_legado`) | gate |
+| `Flag:` | **sim, com `partner:breaking`** | `api.<nome>`: minúsculas, dígitos, `_` e `.` (ex.: `api.remove_campo_legado`). É o formato de chave do changes-api; hífen não vale | gate e ponte |
 | `Docs:` | **sim, com `partner:breaking`** | link do PR em `BullCredTech/bull-api-docs-gitbook` (URL ou `BullCredTech/bull-api-docs-gitbook#123`) | gate |
 
 Regras de leitura:
@@ -130,35 +134,45 @@ O gate passa quando:
 
 1. há **exatamente uma** label `cl:*` e **exatamente uma** `partner:*`. A mensagem diz o que falta ou o que sobra;
 2. com `partner:breaking`, também:
-   - há **aprovação** de alguém em `partnerApprovers` (`config.json`):
-     - vale a última review de cada aprovador;
-     - comentário não conta;
-     - uma aprovação descartada (dismiss) ou seguida de "Request changes" deixa de valer;
-     - **com a lista vazia, o gate falha fechado** e explica por quê;
-   - `Docs:` aponta para um PR do `BullCredTech/bull-api-docs-gitbook`;
-   - `Flag:` tem uma chave no formato `api.<nome>`.
+   - `Flag:` tem uma chave no formato `api.<nome>`;
+   - `Docs:` aponta para um PR do `BullCredTech/bull-api-docs-gitbook`.
 
-PR com base diferente de `main` (ex.: `staging`) não é avaliado: o gate passa direto. O gate **não olha data**. A vigência de uma breaking change vive no registro de mudanças programadas, e o código entra desligado atrás da flag.
+Só isso. O gate **não** exige aprovação própria (a revisão normal do PR basta) e **não** verifica se a flag existe: no merge, a [ponte](#a-ponte-changelog-bridge) cria a mudança programada com essa flag no changes-api, ou anexa o PR à mudança viva que já tem a flag. Até a virada, a flag fica desligada e o código entra sem efeito.
 
-> **TODO, catálogo de flags:** hoje o gate valida só o **formato** da chave. A verificação de que a flag existe no catálogo, adicionada no diff ou já existente, fica isolada em `checkFlagInCatalog()` no `gate.js`. Ela depende da generalização do `sdk_feature_flags` para `feature_flags` com namespace `api.*` no `bull-module-proposals`. Até lá, o log do gate traz uma nota dizendo que essa verificação não rodou.
+PR com base diferente de `main` (ex.: `staging`) não é avaliado: o gate passa direto. O gate **não olha data**. A vigência de uma breaking change vive no registro de mudanças programadas.
 
 Exemplo de falha:
 
 ```
 changelog-gate: 2 pendência(s) no PR #212:
-- `partner:breaking` exige aprovação (review "Approve") de um destes: @fulano. Vale a última review de cada um; ...
+- `partner:breaking` exige o campo `Docs:` na descrição, com o link do PR em BullCredTech/bull-api-docs-gitbook.
 - `partner:breaking` exige o campo `Flag:` na descrição, com a chave da feature flag (formato `api.<nome>`).
 Como resolver: https://github.com/BullCredTech/.github/blob/main/docs/CHANGELOG_TECH.md
+```
+
+Num breaking que passa, o gate deixa um *notice* no resumo do check, para ninguém achar que o merge já avisou o parceiro:
+
+```
+changelog-gate: OK — PR #212 com cl:feat + partner:breaking.
+Lembrete: a mudança só chega ao parceiro quando alguém clicar em Anunciar no BMS. No merge, a ponte cria o rascunho da mudança programada da flag `api.contracts_remove_bank_code` (ou anexa este PR à mudança que já tem a flag); até o anúncio, nada vai para o /changelog nem para o parceiro.
 ```
 
 ### Quando o gate roda (importante)
 
 Como workflow de ruleset, o GitHub só dispara o gate em **`pull_request` `opened`, `synchronize` e `reopened`** e ignora os outros tipos e eventos do `on:`. A [documentação de rulesets](https://docs.github.com/en/enterprise-cloud@latest/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets) diz isso: *"The workflow is only triggered, and is always triggered, by the default activity types of the supported events"*. O histórico do `weekend-holiday-merge-gate` confirma: nenhuma execução por `pull_request_review`.
 
-Na prática, **mudar label, descrição ou review não reavalia o gate sozinho.** Depois de mudar, re-execute o check:
+Na prática, **mudar label ou descrição não reavalia o gate sozinho.** Quem re-executa:
+
+| Quem | Quando | Demora |
+|---|---|---|
+| **Classificador** | logo depois de aplicar ou trocar labels (veja o [contrato](#c-re-executar-o-gate-depois-de-mudar-labels)) | segundos: é o caminho rápido |
+| **[Ponte](#a-ponte-changelog-bridge)** | quando labels, descrição ou reviews mudaram depois da última execução. Cobre as mudanças feitas por humanos | até ~5 min, o intervalo da Lambda |
+| **Você**, para não esperar | quando quiser | na hora |
+
+Para re-executar à mão:
 
 - **Pela UI:** aba *Checks* do PR → `changelog-gate` → *Re-run*.
-- **Pela API**, que é o que o classificador faz. Precisa de `actions: write` no repo, e o check precisa ter terminado:
+- **Pela API**, que é o que o classificador e a ponte fazem. Precisa de `actions: write` no repo, e o check precisa ter terminado:
 
 ```bash
 REPO=BullCredTech/bull-module-proposals; PR=212
@@ -167,7 +181,31 @@ JOB=$(gh api "repos/$REPO/commits/$SHA/check-runs?check_name=changelog-gate" --j
 gh api -X POST "repos/$REPO/actions/jobs/$JOB/rerun"
 ```
 
-O re-run usa o estado atual do PR, porque o gate relê labels, descrição e reviews na API em vez de confiar no payload do evento. Os tipos `labeled`, `edited` e `pull_request_review` ficam no `on:` para o caso de o workflow rodar como workflow local.
+O re-run usa o estado atual do PR, porque o gate relê labels e descrição na API em vez de confiar no payload do evento. Os tipos `labeled`, `unlabeled` e `edited` ficam no `on:` para o caso de o workflow rodar como workflow local.
+
+## A ponte `changelog-bridge`
+
+É uma Lambda agendada no `bull-module-devops`, `bull-devops-production-fn-changelog-bridge`, que roda a cada 5 min dentro da VPC, para alcançar o changes-api, e fala com o GitHub por um GitHub App próprio. **Está sendo construída agora**: até ela entrar no ar, as funções abaixo não acontecem.
+
+Ela faz três coisas:
+
+1. **Re-executa o gate.** Nos PRs abertos para `main` dos repos do piloto, quando labels, descrição ou reviews mudaram depois da última execução do `changelog-gate`, ela re-executa o job. É o que cobre as mudanças humanas, já que workflow de ruleset só roda em `opened`, `synchronize` e `reopened`. O classificador continua re-executando o gate depois de rotular, porque é mais rápido que esperar o ciclo da ponte.
+2. **Cria o rascunho da mudança programada.** Num PR mergeado com `partner:breaking`, faz `POST /v1/admin/scheduled-changes` no changes-api com:
+   - `flag_keys`: a chave do `Flag:`;
+   - `source_prs`: a URL do PR;
+   - `docs_pr_url`: o `Docs:`;
+   - os textos do [comentário do classificador](#b-um-comentário-sempre-o-mesmo), quando existir (`partner_text`, `migration_guide`, `docs`).
+
+   Se a flag já pertence a uma mudança viva, o changes-api só anexa o PR. A chamada é idempotente por URL de PR, então reprocessar não duplica nada.
+3. **Guarda cursor e estado próprios** (DynamoDB ou SSM), para não reprocessar.
+
+Depois do merge, o fluxo segue no BMS e no changes-api, fora desta esteira:
+
+1. O rascunho nasce com a vigência no aviso mínimo (hoje, 60 dias depois da criação).
+2. Alguém revisa no BMS o texto para o parceiro, o guia de migração, os endpoints e a data, e clica em **Anunciar**. É essa a aprovação voltada ao parceiro.
+3. Com o anúncio, a mudança vai para o /changelog (pelo sync do `bull-api-docs-gitbook`), as respostas afetadas passam a levar os headers `Deprecation` e `Sunset`, e o changes-api começa a régua de lembretes no Slack (T-30 e T-7).
+
+A ponte não usa secret deste repo: o GitHub App e o acesso ao changes-api ficam no `bull-module-devops`.
 
 ## O digest
 
@@ -261,7 +299,7 @@ Exemplos:
 | `cl:feat` + `partner:breaking` | `feat` + `additive` | nada. Diz no comentário que vê additive e por quê |
 | `cl:chore` | `feat` + `none` | mantém `cl:chore` e adiciona `partner:none` |
 
-Escalar para `partner:breaking` **bloqueia o merge** até ter aprovação de parcerias, `Flag:` e `Docs:`. É o lado seguro: na dúvida entre additive e breaking, escale e explique.
+Escalar para `partner:breaking` **bloqueia o merge** até ter `Flag:` e `Docs:`. É o lado seguro: na dúvida entre additive e breaking, escale e explique. Quem revisa o PR vê a classificação e, se discordar, rebaixa.
 
 Use os endpoints de adicionar e remover label (`POST`/`DELETE /repos/{owner}/{repo}/issues/{n}/labels`). Nunca use o `PUT` que substitui todas as labels: ele apaga labels de outros fluxos, como `migration` e `dependencies`.
 
@@ -281,7 +319,7 @@ Use os endpoints de adicionar e remover label (`POST`/`DELETE /repos/{owner}/{re
 | `docs` | array de strings | caminhos no `bull-api-docs-gitbook` que mudam. `[]` se nenhum |
 | `reason` | string | por que essa classificação, com a evidência: arquivos, endpoints, campos |
 
-Os campos `type` e `partner` do JSON são a **sugestão**. O que vale para o gate e para o agrupamento são as **labels**. Hoje a esteira lê só o `summary`. `partner_text`, `migration_guide` e `docs` ficam para as próximas etapas: entrada no /changelog e rascunho da mudança programada.
+Os campos `type` e `partner` do JSON são a **sugestão**. O que vale para o gate e para o agrupamento são as **labels**. O digest lê só o `summary`. No merge de um breaking, a [ponte](#a-ponte-changelog-bridge) leva `partner_text`, `migration_guide` e `docs` para o rascunho da mudança programada, onde alguém revisa antes de anunciar.
 
 Exemplo, additive:
 
@@ -322,7 +360,7 @@ Exemplo, breaking. O texto aponta o que falta para o gate passar:
 }
 ```
 
-**Tipo:** feat · **Impacto no parceiro:** breaking. Para o merge: `Flag:` (sugestão `api.contracts_remove_bank_code`), `Docs:` com o PR de doc e aprovação de parcerias.
+**Tipo:** feat · **Impacto no parceiro:** breaking. Para o merge: `Flag:` (sugestão `api.contracts_remove_bank_code`) e `Docs:` com o PR de doc. O parceiro só fica sabendo quando alguém Anunciar no BMS.
 ````
 
 Exemplo, sem impacto:
@@ -341,7 +379,7 @@ Como o gate não reage a `labeled` (veja [Quando o gate roda](#quando-o-gate-rod
 1. espera o check `changelog-gate` do commit de cabeça terminar (`status: completed`);
 2. re-executa o job, com os [comandos acima](#quando-o-gate-roda-importante).
 
-Sem isso, o PR fica vermelho até alguém clicar em *Re-run* ou fazer um push novo.
+Sem isso, o PR fica vermelho até a ponte re-executar o gate, alguém clicar em *Re-run* ou fazer um push novo.
 
 ### (d) O que o classificador não faz
 
@@ -358,19 +396,19 @@ Sem isso, o PR fica vermelho até alguém clicar em *Re-run* ou fazer um push no
 
 O PAT expira, e o GitHub App não. Com PAT, anote a data de renovação. Repo novo no `config.json` também precisa entrar no token. Sem acesso, o digest falha com `422 ... cannot be searched` e cita o repo.
 
-O gate não precisa de secret: usa o `GITHUB_TOKEN` do repo alvo, só leitura.
+O gate não precisa de secret: usa o `GITHUB_TOKEN` do repo alvo, só leitura. A ponte também não usa secret daqui (veja [A ponte](#a-ponte-changelog-bridge)).
 
 ## Como ativar
 
 Passos de admin, nesta ordem:
 
 1. **Merge deste PR** no `BullCredTech/.github`.
-2. **Aprovadores:** preencher `partnerApprovers` em `scripts/changelog/config.json` com os logins do GitHub de parcerias, via PR aqui. Enquanto a lista estiver vazia, todo PR `partner:breaking` fica bloqueado, com mensagem explicando.
-3. **Labels:** rodar `node scripts/changelog/setup-labels.js --dry-run`, revisar e rodar sem `--dry-run`. Precisa de permissão *triage* ou mais nos repos.
-4. **Templates locais:** adicionar a seção `## Changelog` nos três templates listados em [Campos da descrição do PR](#campos-da-descrição-do-pr).
-5. **Dependabot:** o PR do Dependabot não tem quem classifique, porque workflows disparados por ele não recebem os secrets. Em cada `dependabot.yml` do piloto, coloque `labels: ["dependencies", "cl:chore", "partner:none"]`. A lista **substitui** as labels padrão, por isso `dependencies` vai junto.
-6. **Secrets:** criar `SLACK_CHANGELOG_WEBHOOK` e `CHANGELOG_GH_TOKEN` neste repo (*Settings → Secrets and variables → Actions*).
-7. **Testar o digest:** *Actions → changelog-digest → Run workflow*, com `mode: weekly` e `dry_run: true`, e ler a mensagem no log. Depois, uma vez com `dry_run: false`, para validar o canal.
+2. **Labels:** rodar `node scripts/changelog/setup-labels.js --dry-run`, revisar e rodar sem `--dry-run`. Precisa de permissão *triage* ou mais nos repos.
+3. **Templates locais:** adicionar a seção `## Changelog` nos três templates listados em [Campos da descrição do PR](#campos-da-descrição-do-pr).
+4. **Dependabot:** o PR do Dependabot não tem quem classifique, porque workflows disparados por ele não recebem os secrets. Em cada `dependabot.yml` do piloto, coloque `labels: ["dependencies", "cl:chore", "partner:none"]`. A lista **substitui** as labels padrão, por isso `dependencies` vai junto.
+5. **Secrets:** criar `SLACK_CHANGELOG_WEBHOOK` e `CHANGELOG_GH_TOKEN` neste repo (*Settings → Secrets and variables → Actions*).
+6. **Testar o digest:** *Actions → changelog-digest → Run workflow*, com `mode: weekly` e `dry_run: true`, e ler a mensagem no log. Depois, uma vez com `dry_run: false`, para validar o canal.
+7. **Ponte:** deploy da `changelog-bridge` no `bull-module-devops`, com o GitHub App instalado nos repos do piloto e o changes-api no ar. O App precisa ler PRs, reviews e checks e re-executar jobs (*Pull requests: Read*, *Checks: Read*, *Actions: Read and write*). Sem a ponte, o gate ainda funciona, mas mudança humana de label exige *Re-run* manual e o merge de um breaking não gera rascunho no BMS.
 8. **Ruleset `changelog-required`** (*org Settings → Repository → Rulesets → New branch ruleset*):
    - **Enforcement:** **Evaluate** primeiro.
    - **Target repositories:** os repos do piloto **por nome**, sem wildcard, pelo mesmo motivo do [gate de fim de semana](MERGE_GATE_FIM_DE_SEMANA_FERIADO.md).
@@ -378,10 +416,10 @@ Passos de admin, nesta ordem:
    - **Regra:** *Require workflows to pass before merging*, com o workflow `BullCredTech/.github` → `.github/workflows/changelog.yml`, ref `refs/heads/main`.
    - **Bypass list:** *Organization admin*, para override de emergência com rastro auditável.
    - Deixe em Evaluate por uma ou duas semanas e acompanhe em *Rule insights* quantos PRs falhariam e por quê. Confira também, na primeira execução, que o checkout dos scripts funciona.
-   - Com o classificador aplicando labels e re-executando o gate, mude para **Active**. Um workflow que passou em Evaluate vale no Active sem rodar de novo.
+   - Com o classificador e a ponte no ar, mude para **Active**. Um workflow que passou em Evaluate vale no Active sem rodar de novo.
    - A regra bloqueia push direto em `main`. Os repos do piloto já exigem PR, mas confira se nenhuma automação faz push direto na `main` deles.
 
-Antes do Active, o classificador precisa estar no ar, ou o time precisa estar avisado de que aplica as labels à mão. Senão todo PR nasce bloqueado.
+Antes do Active, o classificador precisa estar no ar, ou o time precisa estar avisado de que aplica as labels à mão. Senão todo PR nasce bloqueado. Sem a ponte, avise também que, depois de mudar label ou descrição, é preciso clicar em *Re-run*.
 
 ## Como testar
 
@@ -396,7 +434,7 @@ Gate, sem rede:
 ```bash
 node -e "
 const g = require('./scripts/changelog/gate');
-console.log(g.evaluate({ labels: ['cl:feat', 'partner:breaking'], body: 'Flag: api.x\nDocs: BullCredTech/bull-api-docs-gitbook#1', reviews: [] }));
+console.log(g.evaluate({ labels: ['cl:feat', 'partner:breaking'], body: 'Flag: api.x\nDocs: BullCredTech/bull-api-docs-gitbook#1' }));
 "
 ```
 
@@ -425,20 +463,24 @@ Para testar o gate no ruleset em **Evaluate**, abra um PR de teste num repo do p
 | `owner`, `repos` | repos do piloto, para o digest e o `setup-labels` |
 | `baseBranch` | branch avaliada pelo gate e buscada pelo digest (`main`) |
 | `timezone`, `digestHour` | fuso e hora das janelas do digest. O cron do workflow precisa bater com eles |
-| `partnerApprovers` | logins do GitHub que aprovam `partner:breaking`. Vazio faz o gate falhar fechado |
 | `docsRepo` | repo onde o `Docs:` precisa apontar um PR |
 
-- Mudança aqui exige PR no `BullCredTech/.github`, protegido por CODEOWNERS. Isso inclui trocar os aprovadores.
-- **Repo novo no piloto:** `config.json` + token do digest + ruleset + labels (`setup-labels.js --repo <nome>`) + seção no template local.
-- **Catálogo de flags:** implementar `checkFlagInCatalog()` no `gate.js`, sem mudar o resto do gate.
+- Mudança aqui exige PR no `BullCredTech/.github`, protegido por CODEOWNERS.
+- **Repo novo no piloto:** `config.json` + token do digest + ruleset + labels (`setup-labels.js --repo <nome>`) + seção no template local + instalação do GitHub App da ponte e o repo na lista dela, no `bull-module-devops`.
 
 ## FAQ
 
 **Meu PR ficou vermelho logo ao abrir.**
 O gate rodou antes do classificador aplicar as labels. O classificador re-executa o gate ao terminar. Se ele não rodou, aplique as labels e clique em *Re-run*.
 
-**Mudei a label (ou a descrição, ou aprovei) e o check não mudou.**
-É o esperado em workflow de ruleset: veja [Quando o gate roda](#quando-o-gate-roda-importante). Re-execute o check.
+**Mudei a label (ou a descrição) e o check não mudou.**
+É o esperado em workflow de ruleset: veja [Quando o gate roda](#quando-o-gate-roda-importante). A ponte re-executa o check em até ~5 min. Para não esperar, clique em *Re-run*.
+
+**Quem precisa aprovar um PR breaking?**
+Qualquer pessoa, na revisão normal do PR. Não existe lista de aprovadores. O parceiro só fica sabendo quando alguém Anunciar a mudança programada no BMS.
+
+**Mergeei um breaking. E agora?**
+A ponte cria o rascunho da mudança programada no changes-api. Abra no BMS, revise o texto para o parceiro, o guia de migração e a data, e clique em **Anunciar**. Sem o anúncio, a flag nunca vira e o parceiro nunca é avisado.
 
 **E PR para `staging`?**
 O gate só avalia PR para `main`. Para outras bases ele passa direto.

@@ -4,16 +4,14 @@ name: changelog
 # Doc: docs/CHANGELOG_TECH.md.
 #
 # ATENÇÃO: como workflow de ruleset, o GitHub só dispara nos tipos padrão de `pull_request`
-# (opened, synchronize, reopened) e ignora filtros de branch. Os demais tipos e o
-# `pull_request_review` abaixo só valem se este arquivo rodar como workflow local. Depois de
-# mudar labels, descrição ou review, quem mudou precisa re-executar o check (o classificador
-# faz isso pela API; ver "Contrato com o classificador" no doc).
+# (opened, synchronize, reopened) e ignora filtros de branch. Os demais tipos abaixo só valem se
+# este arquivo rodar como workflow local. Quando labels ou descrição mudam, quem re-executa o check
+# é o classificador (logo depois de rotular) e a ponte `changelog-bridge` (para mudanças humanas);
+# ver "Quando o gate roda" no doc.
 on:
   pull_request:
     branches: [main]
     types: [opened, synchronize, reopened, ready_for_review, edited, labeled, unlabeled]
-  pull_request_review:
-    types: [submitted, dismissed]
 
 permissions:
   contents: read
@@ -41,7 +39,7 @@ jobs:
           sparse-checkout: scripts/changelog
           persist-credentials: false
 
-      - name: Avalia labels, campos e aprovação do PR
+      - name: Avalia labels e campos do PR
         uses: actions/github-script@v7
         with:
           script: |

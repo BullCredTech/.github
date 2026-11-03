@@ -7,23 +7,18 @@ const path = require('node:path');
 const gate = require('../gate');
 const { fakeOctokit, fakeCore, TEMPLATE_BODY } = require('./helpers');
 
-const APPROVER = 'parcerias-bull';
 const CONFIG = {
   owner: 'BullCredTech',
   repos: ['bull-module-proposals'],
   baseBranch: 'main',
   timezone: 'America/Sao_Paulo',
-  partnerApprovers: [APPROVER],
   docsRepo: 'BullCredTech/bull-api-docs-gitbook',
 };
 const DOCS = 'https://github.com/BullCredTech/bull-api-docs-gitbook/pull/42';
 const BREAKING_BODY = `## Summary\n\n- muda o contrato\n\nChangelog: remove o campo legado\nParceiro: o campo X deixa de vir\nFlag: api.remove_campo_x\nDocs: ${DOCS}\n`;
 
-const review = (login, state) => ({ user: { login }, state });
-const approved = [review(APPROVER, 'APPROVED')];
-
 function evaluate(over) {
-  return gate.evaluate({ labels: [], body: '', reviews: [], config: CONFIG, ...over });
+  return gate.evaluate({ labels: [], body: '', config: CONFIG, ...over });
 }
 
 test('sem labels: falta uma de cada eixo, com as opções listadas', () => {
@@ -48,7 +43,7 @@ test('duas labels no mesmo eixo: pede para deixar só uma', () => {
   assert.match(parceiro[0], /Há 2 labels de impacto no parceiro/);
 });
 
-test('uma de cada eixo, sem breaking: passa sem exigir campos nem aprovação', () => {
+test('uma de cada eixo, sem breaking: passa sem exigir campos', () => {
   for (const partner of ['none', 'additive']) {
     const { errors } = evaluate({ labels: ['cl:feat', `partner:${partner}`], body: '' });
     assert.deepEqual(errors, [], partner);
@@ -61,95 +56,64 @@ test('label fora da taxonomia vira nota, não erro', () => {
   assert.match(r.notes.join('\n'), /`cl:docs`/);
 });
 
-test('breaking com tudo certo: passa', () => {
-  const r = evaluate({ labels: ['cl:feat', 'partner:breaking'], body: BREAKING_BODY, reviews: approved });
+test('breaking com Flag e Docs: passa, sem pedir aprovação nem lista de aprovadores', () => {
+  const r = evaluate({ labels: ['cl:feat', 'partner:breaking'], body: BREAKING_BODY });
   assert.deepEqual(r.errors, []);
-  assert.match(r.notes.join('\n'), /Aprovado para parceiro por @parcerias-bull/);
+  assert.equal(r.breaking, true);
+  assert.doesNotMatch(r.notes.join('\n'), /aprova/i);
 });
 
-test('breaking sem aprovador configurado: falha fechado com mensagem clara', () => {
-  const r = gate.evaluate({
-    labels: ['cl:feat', 'partner:breaking'],
-    body: BREAKING_BODY,
-    reviews: approved,
-    config: { ...CONFIG, partnerApprovers: [] },
-  });
-  assert.equal(r.errors.length, 1);
-  assert.match(r.errors[0], /partnerApprovers` está vazio/);
-  assert.match(r.errors[0], /falha fechado/);
-});
-
-test('breaking sem aprovação: comentário e aprovação de quem não é aprovador não contam', () => {
-  for (const reviews of [[], [review(APPROVER, 'COMMENTED')], [review('outra-pessoa', 'APPROVED')]]) {
-    const r = evaluate({ labels: ['cl:feat', 'partner:breaking'], body: BREAKING_BODY, reviews });
-    assert.equal(r.errors.length, 1, JSON.stringify(reviews));
-    assert.match(r.errors[0], /exige aprovação .* @parcerias-bull/);
-  }
-});
-
-test('breaking com aprovação revogada: vale a última review do aprovador', () => {
-  const revogadas = [
-    [review(APPROVER, 'APPROVED'), review(APPROVER, 'CHANGES_REQUESTED')],
-    [review(APPROVER, 'DISMISSED')], // aprovação descartada: a API devolve a review com state DISMISSED
-  ];
-  for (const reviews of revogadas) {
-    const r = evaluate({ labels: ['cl:feat', 'partner:breaking'], body: BREAKING_BODY, reviews });
-    assert.equal(r.errors.length, 1, JSON.stringify(reviews));
-    assert.match(r.errors[0], /exige aprovação/);
-  }
-  // Comentário depois da aprovação não revoga; nova aprovação depois do pedido de mudança vale.
-  for (const reviews of [
-    [review(APPROVER, 'APPROVED'), review(APPROVER, 'COMMENTED')],
-    [review(APPROVER, 'CHANGES_REQUESTED'), review(APPROVER, 'APPROVED')],
-    [review('Parcerias-Bull', 'APPROVED')],
-  ]) {
-    assert.deepEqual(evaluate({ labels: ['cl:feat', 'partner:breaking'], body: BREAKING_BODY, reviews }).errors, [], JSON.stringify(reviews));
-  }
+test('o config não tem mais lista de aprovadores', () => {
+  const config = require('../config.json');
+  assert.equal('partnerApprovers' in config, false);
 });
 
 test('breaking sem Docs, ou com Docs que não é PR do repo de docs', () => {
   const semDocs = BREAKING_BODY.replace(/^Docs:.*$/m, '');
-  let r = evaluate({ labels: ['cl:feat', 'partner:breaking'], body: semDocs, reviews: approved });
+  let r = evaluate({ labels: ['cl:feat', 'partner:breaking'], body: semDocs });
   assert.equal(r.errors.length, 1);
   assert.match(r.errors[0], /exige o campo `Docs:`/);
 
   for (const docs of ['https://docs.bullcredtech.com/changelog', 'https://github.com/BullCredTech/bull-module-proposals/pull/1', 'pendente']) {
-    r = evaluate({ labels: ['cl:feat', 'partner:breaking'], body: BREAKING_BODY.replace(DOCS, docs), reviews: approved });
+    r = evaluate({ labels: ['cl:feat', 'partner:breaking'], body: BREAKING_BODY.replace(DOCS, docs) });
     assert.equal(r.errors.length, 1, docs);
     assert.match(r.errors[0], /precisa apontar para um PR de BullCredTech\/bull-api-docs-gitbook/);
   }
 
   // Forma curta owner/repo#N também vale.
-  r = evaluate({ labels: ['cl:feat', 'partner:breaking'], body: BREAKING_BODY.replace(DOCS, 'BullCredTech/bull-api-docs-gitbook#42'), reviews: approved });
+  r = evaluate({ labels: ['cl:feat', 'partner:breaking'], body: BREAKING_BODY.replace(DOCS, 'BullCredTech/bull-api-docs-gitbook#42') });
   assert.deepEqual(r.errors, []);
 });
 
 test('breaking sem Flag, ou com Flag fora do formato api.<nome>', () => {
   const semFlag = BREAKING_BODY.replace(/^Flag:.*$/m, 'Flag:');
-  let r = evaluate({ labels: ['cl:feat', 'partner:breaking'], body: semFlag, reviews: approved });
+  let r = evaluate({ labels: ['cl:feat', 'partner:breaking'], body: semFlag });
   assert.equal(r.errors.length, 1);
   assert.match(r.errors[0], /exige o campo `Flag:`/);
 
-  for (const flag of ['sdk.otp_disabled', 'api.', 'API.Campo', 'api.campo x']) {
-    r = evaluate({ labels: ['cl:feat', 'partner:breaking'], body: BREAKING_BODY.replace('api.remove_campo_x', flag), reviews: approved });
+  // `-` fica de fora: o changes-api recusa (CHECK em flag_rules.key) e a ponte quebraria no merge.
+  for (const flag of ['sdk.otp_disabled', 'api.', 'API.Campo', 'api.campo x', 'api.campo-x', 'api..x', 'api']) {
+    r = evaluate({ labels: ['cl:feat', 'partner:breaking'], body: BREAKING_BODY.replace('api.remove_campo_x', flag) });
     assert.equal(r.errors.length, 1, flag);
     assert.match(r.errors[0], /formato `api.<nome>`/);
   }
   // Crase em volta da chave é tolerada.
-  r = evaluate({ labels: ['cl:feat', 'partner:breaking'], body: BREAKING_BODY.replace('api.remove_campo_x', '`api.remove_campo_x`'), reviews: approved });
+  r = evaluate({ labels: ['cl:feat', 'partner:breaking'], body: BREAKING_BODY.replace('api.remove_campo_x', '`api.remove_campo_x`') });
   assert.deepEqual(r.errors, []);
 });
 
 test('breaking com o template vazio: Docs e Flag faltam (a linha de baixo não vira valor)', () => {
-  const r = evaluate({ labels: ['cl:feat', 'partner:breaking'], body: TEMPLATE_BODY, reviews: approved });
+  const r = evaluate({ labels: ['cl:feat', 'partner:breaking'], body: TEMPLATE_BODY });
   assert.equal(r.errors.length, 2);
   assert.match(r.errors[0], /exige o campo `Docs:`/);
   assert.match(r.errors[1], /exige o campo `Flag:`/);
 });
 
-test('breaking sem nada: lista todas as pendências de uma vez', () => {
-  const r = gate.evaluate({ labels: ['cl:feat', 'partner:breaking'], body: '', reviews: [], config: { ...CONFIG, partnerApprovers: [] } });
-  assert.equal(r.errors.length, 3);
+test('breaking sem nada: lista as duas pendências de uma vez', () => {
+  const r = evaluate({ labels: ['cl:feat', 'partner:breaking'], body: '' });
+  assert.equal(r.errors.length, 2);
+  assert.match(r.errors[0], /exige o campo `Docs:`/);
+  assert.match(r.errors[1], /exige o campo `Flag:`/);
 });
 
 test('additive sem Parceiro: só nota, não bloqueia', () => {
@@ -193,29 +157,41 @@ test('run: falha com a lista de pendências e o link do doc', async () => {
   assert.match(core.failed, /docs\/CHANGELOG_TECH\.md/);
 });
 
-test('run: breaking busca as reviews e passa com aprovação; o TODO do catálogo vira nota', async () => {
+test('run: breaking com Flag e Docs passa sem buscar reviews e lembra do Anunciar no BMS', async () => {
   const github = fakeOctokit({
     'GET /repos/{owner}/{repo}/pulls/{pull_number}': () => prFixture({ labels: ['cl:feat', 'partner:breaking'], body: BREAKING_BODY }),
-    'GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews': () => approved,
-  });
-  const core = fakeCore();
-  await gate.run({ github, context: ctx(7, 'pull_request_review'), core, config: CONFIG });
-  assert.equal(core.failed, null);
-  assert.match(core.infos.join('\n'), /Flag `api.remove_campo_x`: verificação no catálogo de flags ainda não implementada/);
-});
-
-test('run: breaking sem aprovação falha', async () => {
-  const github = fakeOctokit({
-    'GET /repos/{owner}/{repo}/pulls/{pull_number}': () => prFixture({ labels: ['cl:feat', 'partner:breaking'], body: BREAKING_BODY }),
-    'GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews': () => [review(APPROVER, 'COMMENTED')],
   });
   const core = fakeCore();
   await gate.run({ github, context: ctx(), core, config: CONFIG });
-  assert.match(core.failed, /1 pendência\(s\)/);
-  assert.match(core.failed, /exige aprovação/);
+  assert.equal(core.failed, null);
+  assert.deepEqual(github.calls.map((c) => c.route), ['GET /repos/{owner}/{repo}/pulls/{pull_number}']);
+  assert.match(core.infos.join('\n'), /OK — PR #7 com cl:feat \+ partner:breaking/);
+  assert.equal(core.notices.length, 1);
+  assert.match(core.notices[0], /só chega ao parceiro quando alguém clicar em Anunciar no BMS/);
+  assert.match(core.notices[0], /`api\.remove_campo_x`/);
 });
 
-test('run: PR contra outra base (ex.: staging, via pull_request_review) não é avaliado', async () => {
+test('run: sem breaking, nenhum lembrete de anúncio', async () => {
+  const github = fakeOctokit({
+    'GET /repos/{owner}/{repo}/pulls/{pull_number}': () => prFixture({ labels: ['cl:feat', 'partner:additive'], body: 'Parceiro: campo novo' }),
+  });
+  const core = fakeCore();
+  await gate.run({ github, context: ctx(), core, config: CONFIG });
+  assert.equal(core.failed, null);
+  assert.deepEqual(core.notices, []);
+});
+
+test('run: breaking sem Flag nem Docs falha e não lembra do anúncio', async () => {
+  const github = fakeOctokit({
+    'GET /repos/{owner}/{repo}/pulls/{pull_number}': () => prFixture({ labels: ['cl:feat', 'partner:breaking'], body: TEMPLATE_BODY }),
+  });
+  const core = fakeCore();
+  await gate.run({ github, context: ctx(), core, config: CONFIG });
+  assert.match(core.failed, /2 pendência\(s\)/);
+  assert.deepEqual(core.notices, []);
+});
+
+test('run: PR contra outra base (ex.: staging) não é avaliado', async () => {
   const github = fakeOctokit({ 'GET /repos/{owner}/{repo}/pulls/{pull_number}': () => prFixture({ base: 'staging' }) });
   const core = fakeCore();
   await gate.run({ github, context: ctx(), core, config: CONFIG });
@@ -236,5 +212,6 @@ test('workflow changelog.yml carrega o gate.js que existe, no checkout .changelo
   assert.match(wf, /name: changelog-gate/);
   assert.match(wf, /\.changelog-bot\/scripts\/changelog\/gate\.js/);
   assert.match(wf, /ref: \$\{\{ github\.workflow_sha \}\}/);
+  assert.doesNotMatch(wf, /pull_request_review/, 'o gate não lê reviews');
   assert.ok(fs.existsSync(path.join(root, 'scripts/changelog/gate.js')));
 });

@@ -22,9 +22,11 @@ function fakeOctokit(routes) {
 function fakeCore() {
   const core = {
     infos: [],
+    notices: [],
     warnings: [],
     failed: null,
     info: (m) => core.infos.push(m),
+    notice: (m) => core.notices.push(m),
     warning: (m) => core.warnings.push(m),
     setFailed: (m) => {
       core.failed = m;

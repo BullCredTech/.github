@@ -22,7 +22,7 @@ const TYPES = {
 const PARTNERS = {
   none: { severity: 0, color: 'EDEDED', description: 'Parceiro: sem impacto para parceiros' },
   additive: { severity: 1, color: 'FEF2C0', description: 'Parceiro: mudança compatível que vale comunicar (campo, endpoint, enum novo)' },
-  breaking: { severity: 2, color: 'B60205', description: 'Parceiro: quebra contrato; exige flag api.*, doc e aprovação de parcerias' },
+  breaking: { severity: 2, color: 'B60205', description: 'Parceiro: quebra contrato; exige flag api.* e PR de doc; anunciar no BMS' },
 };
 
 const TYPE_KEYS = Object.keys(TYPES);

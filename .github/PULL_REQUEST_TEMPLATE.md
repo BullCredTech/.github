@@ -31,7 +31,7 @@ Deixe em branco o que não se aplica, mas mantenha cada campo na sua linha.
 - Flag: chave da feature flag que liga a mudança (formato api.<nome>). Obrigatório com partner:breaking.
 - Docs: link do PR em BullCredTech/bull-api-docs-gitbook. Obrigatório com partner:breaking.
 As labels cl:* (tipo) e partner:* (impacto no parceiro) vêm do classificador ou de quem abre o PR.
-O check changelog-gate exige uma de cada e, com partner:breaking, Flag, Docs e aprovação de parcerias.
+O check changelog-gate exige uma de cada e, com partner:breaking, Flag e Docs. A revisão normal do PR aprova; o parceiro só fica sabendo quando alguém Anunciar no BMS.
 -->
 
 Changelog:
