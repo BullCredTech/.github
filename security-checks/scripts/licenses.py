@@ -40,6 +40,12 @@ NEGADAS = {
 } | {f'{fam}-{suf}' for fam in ('gpl-2.0', 'gpl-3.0', 'agpl-3.0', 'lgpl-2.0', 'lgpl-2.1', 'lgpl-3.0')
      for suf in ('only', 'or-later')}
 
+# Pacotes internos da org (npm): o escopo @bull-* é publicado no CodeArtifact da Bull, e o código é
+# proprietário, por isso declara "UNLICENSED" (o valor que o npm recomenda para isso). Só essa licença
+# ganha a exceção, e só quando o nome bate com o escopo E com o lugar onde o pacote está instalado
+# (node_modules/@bull-x/nome): um pacote que apenas declara esse nome noutro diretório não vira interno.
+INTERNO_RE = re.compile(r'^@bull-[a-z0-9][a-z0-9-]*/[a-z0-9][a-z0-9._-]*$')
+
 # Grafias equivalentes -> forma normalizada.
 SINONIMOS = {
     'mit license': 'mit',
@@ -247,15 +253,28 @@ def _permitido(termo, permitidas):
     return termo == 'bsd' and any(p.startswith('bsd-') for p in permitidas)
 
 
-def avaliar(pacotes, permitidas, estrito=False):
+def interno_unlicensed(p):
+    """Pacote interno @bull-* instalado no próprio caminho e com licença exatamente UNLICENSED (ver INTERNO_RE)."""
+    nome = p.get('Name', '') or ''
+    caminho = (p.get('Path', '') or '').replace('\\', '/')
+    return (INTERNO_RE.match(nome) is not None
+            and (caminho == f'node_modules/{nome}' or caminho.endswith(f'/node_modules/{nome}'))
+            and termos(p.get('License', '') or '') == ['unlicensed'])
+
+
+def avaliar(pacotes, permitidas, estrito=False, internos=None):
     """`(reprovados, indefinidos)`: cada item é `(nome, versão, licença, razão)`.
 
     estrito (npm): sem licença declarada nem reconhecível no LICENSE => reprova, não só avisa.
+    internos (npm): lista que recebe os pacotes @bull-* com UNLICENSED, que passam (ver INTERNO_RE).
     """
     reprovados, indefinidos = [], []
     for p in pacotes:
         nome = p.get('Name', '?')
         versao = p.get('Version', '?')
+        if internos is not None and interno_unlicensed(p):
+            internos.append((nome, versao))
+            continue
         licenca = p.get('License', '') or ''
         if estrito and not termos(licenca):
             licenca = detectar_licenca(p.get('LicenseText', '') or '')
@@ -302,8 +321,14 @@ def main(argv=None):
         pacotes = inventario_dart(args.diretorio)
         origem = args.diretorio
 
-    reprovados, indefinidos = avaliar(pacotes, permitidas, estrito=(args.modo == 'npm'))
+    internos = [] if args.modo == 'npm' else None
+    reprovados, indefinidos = avaliar(pacotes, permitidas, estrito=(args.modo == 'npm'), internos=internos)
     print(f'{len(pacotes)} pacotes inventariados em: {origem}')
+
+    if internos:
+        print(f'\n{len(internos)} pacote(s) interno(s) @bull-* com UNLICENSED (aceitos):')
+        for nome, versao in sorted(set(internos)):
+            print(f'  - {nome} {versao}')
 
     # Licença não declarada NÃO reprova (senão o check vira ruído); sai listada.
     if indefinidos:

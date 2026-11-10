@@ -218,6 +218,11 @@ jobs:
     needs: prepare
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # id-token só neste job: o login no CodeArtifact (pacotes npm privados) usa OIDC. Os outros jobs
+    # seguem só com contents: read.
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - name: Arquivo de exceções inválido
         if: needs.prepare.outputs.config_ok != 'true'
@@ -244,6 +249,28 @@ jobs:
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         if: steps.eco.outputs.node == 'true'
         with: { node-version: '24' }
+      # Pacotes npm privados no CodeArtifact: sem token, o install toma 401 e o projeto reprova como
+      # "dependências não verificáveis". O endpoint vem dos lockfiles e .npmrc do repo, validado por regex
+      # no codeartifact.sh. A role só lê o repositório npm, o token vai para ~/.npmrc (fora do repo) e as
+      # credenciais AWS são zeradas antes do install.
+      - id: ca
+        if: steps.eco.outputs.node == 'true'
+        run: bash .org-security/security-checks/scripts/codeartifact.sh detect "$GITHUB_WORKSPACE" >> "$GITHUB_OUTPUT"
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        if: steps.ca.outputs.needed == 'true'
+        with:
+          role-to-assume: arn:aws:iam::${{ steps.ca.outputs.owner }}:role/GitHubActionsCodeArtifactReadRole
+          role-session-name: org-security-license
+          role-duration-seconds: 1800
+          aws-region: ${{ steps.ca.outputs.region }}
+      - name: Token do CodeArtifact em ~/.npmrc
+        if: steps.ca.outputs.needed == 'true'
+        env:
+          DOMAIN: ${{ steps.ca.outputs.domain }}
+          OWNER: ${{ steps.ca.outputs.owner }}
+          REGION: ${{ steps.ca.outputs.region }}
+          REPOSITORIES: ${{ steps.ca.outputs.repositories }}
+        run: bash .org-security/security-checks/scripts/codeartifact.sh login
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         if: steps.eco.outputs.python == 'true' || steps.eco.outputs.flutter == 'true'
         with: { python-version: '3.12' }

@@ -115,6 +115,8 @@ O job **não executa código do repo**: não roda `npm`/`yarn` com scripts, não
 - Precisa de `package-lock.json` ou `yarn.lock`. Um `package.json` que declara dependências **sem lockfile reprova** ("sem lockfile: dependências não verificáveis"). Sem dependências, passa.
 - Instala só dependências de produção, **sem scripts** (`npm ci --ignore-scripts --omit=dev`, ou o equivalente do yarn v1) e percorre **todo o `node_modules`, em qualquer profundidade**, incluindo as versões aninhadas que não subiram.
 - Configurações do repo que fariam o gerenciador executar um programa do próprio repo são neutralizadas: `yarn-path` do `.yarnrc` (`YARN_IGNORE_PATH=1`) e `git=` do `.npmrc` (`--git=git`).
+- **Pacotes privados no AWS CodeArtifact:** se um lockfile ou um `.npmrc`/`.yarnrc` do repo aponta para um repositório npm do CodeArtifact, o job assume por OIDC uma role só de leitura na conta dona do domínio e grava um token temporário em `~/.npmrc`, fora do repo. O endpoint é validado por formato, e todos precisam ser do mesmo domínio, conta e região. As credenciais AWS são zeradas antes do install.
+- **Pacotes internos `@bull-*`:** são proprietários e declaram `UNLICENSED`, o valor que o npm recomenda para isso. Essa licença é aceita só para eles, e só quando o pacote está instalado no caminho do próprio nome (`node_modules/@bull-x/nome`). Qualquer outra licença que eles declarem passa pela allowlist normal.
 - Workspaces: a lista vem do próprio `npm query` (ou `yarn workspaces info`); cada workspace precisa estar dentro do repo e instalado em `node_modules`. São "do próprio repo" só a raiz e esses workspaces.
 - Todo o resto é verificado como terceiro, **inclusive pacotes `private: true`, dependências `file:` e links simbólicos** (por exemplo para uma pasta `vendor/` do próprio repo). Cada pacote é identificado pelo caminho, não por nome e versão: duas cópias da mesma versão são duas verificações.
 - **Sem licença declarada** no `package.json`: usa o arquivo `LICENSE`, `LICENSE.md`, `LICENSE.txt` ou `COPYING` do pacote, se for reconhecível; se não, **reprova**, com a mensagem "sem licença declarada: nome@versão (caminho) — se for aceitável, peça exceção". Um valor de licença presente mas estranho (número, lista, objeto sem `type`) também reprova.
@@ -142,6 +144,7 @@ O job **não executa código do repo**: não roda `npm`/`yarn` com scripts, não
 ## 8. Riscos que continuam
 
 - O job de licença ainda **instala pacotes de terceiros** no runner (sem executar scripts de instalação, mas wheels podem carregar arquivos que são colocados no ambiente) e roda ferramentas que resolvem dependências. A mitigação é: só wheels, sem scripts, runner descartável, credenciais não persistidas e verificação de integridade do verificador antes de avaliar.
+- O job de licença tem `id-token: write`, para o login no CodeArtifact. Ele instala as dependências do PR sem scripts e neutraliza as configurações que executariam código do repo; se algo escapar disso, o token OIDC do job vale para qualquer role que confie no repo.
 - Supressões inline são permitidas e só **visíveis**, não bloqueadas: o controle real é a revisão do PR.
 - Os checks dependem do registro de pacotes e dos downloads das ferramentas (seção 9).
 - A lista de licenças é um insumo técnico, não uma decisão jurídica: licenças com restrições devem ser avaliadas caso a caso e entrar por exceção.
