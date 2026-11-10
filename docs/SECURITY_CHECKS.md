@@ -104,9 +104,13 @@ Para uma exceção válida para toda a organização (por exemplo, uma licença 
 
 ## 7. Verificação de licenças
 
-Lista permitida por padrão (SPDX): `MIT`, `Apache-2.0`, `BSD-2-Clause`, `BSD-3-Clause`, `ISC`, `0BSD`, `CC0-1.0`, `Unlicense`, `BlueOak-1.0.0`, `Python-2.0`, `MIT-0`, `MIT-CMU`, `Zlib`, `PSF-2.0`. Licenças adicionais por repo, como a `MPL-2.0` (copyleft por arquivo), entram em `license.extra_allowed`.
+Lista permitida por padrão (SPDX), em `security-checks/license-allowlist.txt`: `MIT`, `Apache-2.0`, `BSD-2-Clause`, `BSD-3-Clause`, `ISC`, `0BSD`, `CC0-1.0`, `Unlicense`, `BlueOak-1.0.0`, `Python-2.0`, `MIT-0`, `MIT-CMU`, `Zlib`, `PSF-2.0`, `X11`, `CC-BY-3.0`, `CC-BY-4.0`, `MPL-2.0`, as variantes de `LGPL-2.0`, `LGPL-2.1` e `LGPL-3.0`, `FSL-1.1-MIT` e `FSL-1.1-ALv2`. Licenças adicionais por repo entram em `license.extra_allowed`.
 
-Em licenças compostas, **todo termo** (`AND` e `OR`) precisa estar permitido: é conservador de propósito. Cada subprojeto do repo é verificado (monorepos têm vários); `node_modules`, `.git`, ambientes virtuais e caches de Terraform são ignorados, mas `build/` e `dist/` **não**.
+**Por que essa lista.** A organização opera em modelo SaaS: o software roda nos próprios servidores e não é entregue a terceiros. As obrigações de copyleft fraco (MPL, LGPL) e de atribuição (CC-BY) nascem na distribuição, então não pesam nesse uso. Continuam bloqueadas as licenças com cláusula de uso em rede ou restrição de uso (`AGPL`, `SSPL`, `OSL`, `EUPL`, `CPAL`, `BUSL`, as não comerciais) e a `GPL`. A GPL fica bloqueada porque o código que vai para o navegador e os SDKs entregues a terceiros são distribuição.
+
+Em licenças compostas vale a semântica SPDX: no `OR` basta uma opção permitida, porque quem usa escolhe a licença (`MIT OR GPL-3.0` é usado como MIT). No `AND`, todas precisam estar permitidas. `;` e `/` fora de uma expressão contam como `AND`. Uma expressão malformada volta à regra conservadora, em que todo termo precisa estar permitido.
+
+Pacote npm sem licença no `package.json` nem arquivo `LICENSE`, mas com a licença registrada no registry, pode entrar na lista central `security-checks/license-known.txt` (`nome@versão SPDX`), por PR revisado pelo time `devops`. A lista não sobrepõe licença declarada pelo próprio pacote. Cada subprojeto do repo é verificado (monorepos têm vários); `node_modules`, `.git`, ambientes virtuais e caches de Terraform são ignorados, mas `build/` e `dist/` **não**.
 
 O job **não executa código do repo**: não roda `npm`/`yarn` com scripts, não faz `pip install .`, não compila nada a partir de código-fonte de pacote. Antes de cada avaliação, confere que o diretório central do verificador está no SHA esperado e sem alterações.
 
