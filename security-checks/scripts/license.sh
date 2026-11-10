@@ -186,6 +186,9 @@ export npm_config_git=git          # ignora `git=./programa` do .npmrc (e as fla
 integridade || { resumo "❌ licença: verificador alterado durante o job"; exit 1; }
 allowfile="${3:?}"; extras="${4:-}"
 allow="$(grep -vE '^[[:space:]]*(#|$)' "$allowfile" | paste -sd ';' -)"
+# Pacotes npm sem licença no package.json, mas com licença no registry (ver o próprio arquivo). Vazio = sem lista.
+conhecidos="$(dirname "$allowfile")/license-known.txt"
+[ -f "$conhecidos" ] || conhecidos=""
 [ -z "$extras" ] || allow="$allow;$extras"
 falhou=0; checados=0
 # ---------------- npm e yarn ----------------
@@ -233,7 +236,7 @@ $w"; done
   integridade || { rm -f "$inv"; return 1; }
   node "$here/npmwalk.js" "$d" ${margs[@]+"${margs[@]}"} ${wargs[@]+"${wargs[@]}"} > "$inv" || { rm -f "$inv"; return 1; }
   integridade || { rm -f "$inv"; return 1; }
-  "$SYS_PY" -I -S "$here/licenses.py" npm --allow "$allow" < "$inv" || { rm -f "$inv"; return 1; }
+  "$SYS_PY" -I -S "$here/licenses.py" npm --allow "$allow" --conhecidos "$conhecidos" < "$inv" || { rm -f "$inv"; return 1; }
   rm -f "$inv"
 }
 
