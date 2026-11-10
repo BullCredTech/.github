@@ -15,3 +15,23 @@ MIT-0
 MIT-CMU
 Zlib
 PSF-2.0
+# Acrescentadas em 10/11/2026 (decisão do CTO), pelo modelo SaaS: o software roda nos nossos servidores e não é
+# distribuído, então estas licenças não criam obrigação de abrir código no nosso uso. Código que vai para o
+# navegador ou SDK entregue a terceiros é distribuição: aí MPL e LGPL pedem os avisos e o fonte do próprio pacote.
+# CC-BY: pacotes de dados (caniuse-lite, spdx-exceptions); pede atribuição se redistribuído.
+CC-BY-3.0
+CC-BY-4.0
+# MPL-2.0: copyleft por arquivo; só obriga ao modificar e distribuir o próprio arquivo.
+MPL-2.0
+# LGPL: copyleft fraco (psycopg, paramiko, sharp/libvips); no servidor não há distribuição.
+LGPL-2.0-only
+LGPL-2.0-or-later
+LGPL-2.1-only
+LGPL-2.1-or-later
+LGPL-3.0-only
+LGPL-3.0-or-later
+# FSL: só proíbe produto concorrente do licenciador e vira MIT ou Apache-2.0 em 2 anos (ex.: @sentry/cli).
+FSL-1.1-MIT
+FSL-1.1-ALv2
+# X11: equivalente à MIT (aparece como "MIT/X11" em pacotes antigos).
+X11
