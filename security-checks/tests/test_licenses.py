@@ -178,3 +178,30 @@ def test_lgpl_variantes_e_ids_spdx_only_no_extra_allowed():
     assert run(["pip", "--allow", ALLOW + ";LGPL-3.0"], lg).returncode == 0   # id antigo equivale a -only
     bib = pip_json(("b", "GNU Library or Lesser General Public License (LGPL)"))
     assert run(["pip", "--allow", ALLOW + ";LGPL-2.0-or-later"], bib).returncode == 0
+
+def npm_json(*itens):
+    return json.dumps([{"Name": n, "Version": "1.0", "Path": c, "License": l} for n, c, l in itens])
+
+def test_npm_interno_bull_unlicensed_passa_e_sai_listado():
+    r = run(["npm", "--allow", ALLOW], npm_json(
+        ("@bull-exemplo/sdk", "node_modules/@bull-exemplo/sdk", "UNLICENSED"),
+        ("@bull-outro/lib", "apps/api/node_modules/@bull-outro/lib", "UNLICENSED"),
+        ("lodash", "node_modules/lodash", "MIT")))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "@bull-exemplo/sdk" in r.stdout and "interno" in r.stdout
+
+def test_npm_unlicensed_fora_do_escopo_bull_reprova():
+    r = run(["npm", "--allow", ALLOW], npm_json(("@outra/pkg", "node_modules/@outra/pkg", "UNLICENSED")))
+    assert r.returncode == 1 and "@outra/pkg" in r.stdout
+
+def test_npm_nome_bull_em_outro_caminho_nao_vira_interno():
+    r = run(["npm", "--allow", ALLOW], npm_json(("@bull-exemplo/sdk", "node_modules/qualquer", "UNLICENSED")))
+    assert r.returncode == 1
+
+def test_npm_interno_com_licenca_fora_da_allowlist_reprova():
+    r = run(["npm", "--allow", ALLOW], npm_json(("@bull-outro/x", "node_modules/@bull-outro/x", "GPL-3.0-only")))
+    assert r.returncode == 1
+
+def test_pip_unlicensed_com_nome_bull_nao_ganha_excecao():
+    r = run(["pip", "--allow", ALLOW], pip_json(("@bull-outro/x", "UNLICENSED")))
+    assert r.returncode == 1
