@@ -1,8 +1,8 @@
 """Conferência de licenças de dependências Python (pip-licenses) e Dart/Flutter contra uma allowlist.
 
 Origem: porte dos dois scripts `verificar_licencas.py` que já rodavam em CI:
-  - BullCredTech/bull-web-cash-flow (Python, via pip-licenses);
-  - BullCredTech/bull-mobile-platform (Dart/Flutter, detecção pelo texto do LICENSE).
+  - um repo Python da org (via pip-licenses);
+  - um repo Dart/Flutter da org (detecção pelo texto do LICENSE).
 As funções normalizar(), termos() e detectar_licenca() vêm do script do mobile
 (nas funções de normalização os dois eram iguais). A diferença daqui: a allowlist
 NÃO é fixa no código; vem só de `--allow` (SPDX separados por ';').
