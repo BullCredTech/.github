@@ -205,3 +205,77 @@ def test_npm_interno_com_licenca_fora_da_allowlist_reprova():
 def test_pip_unlicensed_com_nome_bull_nao_ganha_excecao():
     r = run(["pip", "--allow", ALLOW], pip_json(("@bull-outro/x", "UNLICENSED")))
     assert r.returncode == 1
+
+ALLOWLIST = (pathlib.Path(__file__).parent.parent / "license-allowlist.txt").read_text()
+ALLOW_PADRAO = ";".join(l.strip() for l in ALLOWLIST.splitlines() if l.strip() and not l.strip().startswith("#"))
+
+def test_or_com_uma_opcao_permitida_passa():
+    r = run(["npm", "--allow", ALLOW], npm_json(
+        ("jszip", "node_modules/jszip", "(MIT OR GPL-3.0-or-later)"),
+        ("dompurify", "node_modules/dompurify", "(MPL-2.0 OR Apache-2.0)")))
+    assert r.returncode == 0, r.stdout
+
+def test_or_sem_opcao_permitida_reprova():
+    r = run(["npm", "--allow", ALLOW], npm_json(("x", "node_modules/x", "GPL-3.0-only OR AGPL-3.0-only")))
+    assert r.returncode == 1 and "copyleft forte" in r.stdout
+
+def test_and_com_um_termo_fora_reprova():
+    r = run(["npm", "--allow", ALLOW], npm_json(("x", "node_modules/x", "MIT AND GPL-3.0-only")))
+    assert r.returncode == 1
+
+def test_expressao_aninhada():
+    ok = npm_json(("x", "node_modules/x", "(GPL-3.0-only OR (MIT AND Apache-2.0))"))
+    assert run(["npm", "--allow", ALLOW], ok).returncode == 0
+    ruim = npm_json(("y", "node_modules/y", "(GPL-3.0-only OR (MIT AND AGPL-3.0-only))"))
+    assert run(["npm", "--allow", ALLOW], ruim).returncode == 1
+
+def test_expressao_malformada_cai_na_regra_antiga():
+    r = run(["npm", "--allow", ALLOW], npm_json(("x", "node_modules/x", "(MIT OR GPL-3.0-only")))
+    assert r.returncode == 1
+
+def test_opcao_sem_licenca_reconhecivel_nao_conta_como_permitida():
+    r = run(["npm", "--allow", ALLOW], npm_json(("x", "node_modules/x", "UNKNOWN OR GPL-3.0-only")))
+    assert r.returncode == 1
+
+def test_allowlist_padrao_aceita_licencas_de_saas():
+    pacotes = npm_json(
+        ("caniuse-lite", "node_modules/caniuse-lite", "CC-BY-4.0"),
+        ("spdx-exceptions", "node_modules/spdx-exceptions", "CC-BY-3.0"),
+        ("@vercel/stega", "node_modules/@vercel/stega", "MPL-2.0"),
+        ("@sentry/cli", "node_modules/@sentry/cli", "FSL-1.1-MIT"),
+        ("@img/sharp-libvips-linux-x64", "node_modules/@img/sharp-libvips-linux-x64", "LGPL-3.0-or-later"),
+        ("traverse", "node_modules/traverse", "MIT/X11"))
+    r = run(["npm", "--allow", ALLOW_PADRAO], pacotes)
+    assert r.returncode == 0, r.stdout
+    py = pip_json(("psycopg2-binary", "GNU Library or Lesser General Public License (LGPL)"),
+                  ("certifi", "Mozilla Public License 2.0 (MPL 2.0)"), ("paramiko", "LGPL-2.1"))
+    assert run(["pip", "--allow", ALLOW_PADRAO], py).returncode == 0
+
+def test_allowlist_padrao_segue_bloqueando_uso_em_rede_e_gpl():
+    for lic in ("AGPL-3.0-only", "SSPL-1.0", "BUSL-1.1", "OSL-3.0", "EUPL-1.2", "GPL-3.0-only", "CC-BY-NC-4.0"):
+        r = run(["npm", "--allow", ALLOW_PADRAO], npm_json(("x", "node_modules/x", lic)))
+        assert r.returncode == 1, lic
+
+def test_conhecidos_cobre_pacote_sem_licenca(tmp_path):
+    lista = tmp_path / "known.txt"
+    lista.write_text("# comentario\npause@1.0 MIT   # registry\n")
+    sem = npm_json(("pause", "node_modules/pause", ""))
+    assert run(["npm", "--allow", ALLOW], sem).returncode == 1
+    r = run(["npm", "--allow", ALLOW, "--conhecidos", str(lista)], sem)
+    assert r.returncode == 0, r.stdout
+    assert "lista de conhecidos" in r.stdout
+
+def test_conhecidos_nao_vale_para_outra_versao_nem_sobrepoe_licenca(tmp_path):
+    lista = tmp_path / "known.txt"
+    lista.write_text("pause@0.0.1 MIT\nx@1.0 MIT\n")
+    outra = npm_json(("pause", "node_modules/pause", ""))
+    outra = outra.replace('"1.0"', '"0.0.2"')
+    assert run(["npm", "--allow", ALLOW, "--conhecidos", str(lista)], outra).returncode == 1
+    declarada = npm_json(("x", "node_modules/x", "GPL-3.0-only"))
+    assert run(["npm", "--allow", ALLOW, "--conhecidos", str(lista)], declarada).returncode == 1
+
+def test_conhecidos_invalido_falha(tmp_path):
+    lista = tmp_path / "known.txt"
+    lista.write_text("pause MIT\n")
+    r = run(["npm", "--allow", ALLOW, "--conhecidos", str(lista)], npm_json(("x", "node_modules/x", "MIT")))
+    assert r.returncode == 2
