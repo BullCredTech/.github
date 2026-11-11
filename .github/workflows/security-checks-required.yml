@@ -1,7 +1,7 @@
 name: org-security
 
 # Exigido pela regra da org `org-security-checks` em PRs para a branch padrão e `production`.
-# Desenho: bull-module-devops docs/superpowers/specs/2026-10-20-org-security-checks-design.md
+# Desenho: documentação interna do time devops (spec de 20/10/2026 do workflow central).
 #
 # Regras deste arquivo:
 #  - todo `run:` recebe valores dinâmicos só por `env:` (nunca expressão dentro do script);
@@ -146,7 +146,7 @@ jobs:
         if: needs.prepare.outputs.config_ok == 'true' && (needs.prepare.outputs.docs_only == 'true' || contains(needs.prepare.outputs.skip, 'semgrep'))
         run: |
           echo "Sem scan: PR só de documentação ou skip declarado no repo." | tee -a "$GITHUB_STEP_SUMMARY"
-      # Credencial persistida DE PROPÓSITO, só neste job (padrão do bull-tracking #53): o `semgrep ci`
+      # Credencial persistida DE PROPÓSITO, só neste job (padrão já validado num repo da org): o `semgrep ci`
       # busca a branch base para comparar, e em repo privado o fetch sem credencial aborta e o check sai verde.
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         if: needs.prepare.outputs.config_ok == 'true' && needs.prepare.outputs.docs_only != 'true' && !contains(needs.prepare.outputs.skip, 'semgrep')
