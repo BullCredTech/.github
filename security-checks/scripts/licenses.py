@@ -111,6 +111,14 @@ _CLASSIFICADORES = {
     'european union public licence 1.2 (eupl 1.2)': 'EUPL-1.2',
     'python software foundation license': 'PSF-2.0',
     'academic free license (afl)': 'AFL-3.0',
+    # Permissivas da allowlist padrão: sem o mapa, o título não casa com o id (aws-lambda-powertools declara
+    # MIT-0), e o "/" do zlib/libpng separaria um termo "libpng license".
+    'mit no attribution license (mit-0)': 'MIT-0',
+    'cmu license (mit-cmu)': 'MIT-CMU',
+    'zero-clause bsd (0bsd)': '0BSD',
+    'blue oak model license (blueoak-1.0.0)': 'BlueOak-1.0.0',
+    'cc0 1.0 universal (cc0 1.0) public domain dedication': 'CC0-1.0',
+    'zlib/libpng license': 'Zlib',
 }
 _RE_CLASSIFICADOR = re.compile('|'.join(re.escape(k) for k in sorted(_CLASSIFICADORES, key=len, reverse=True)), re.IGNORECASE)
 _RE_OR_LATER = re.compile(r'\s+or\s+(?:any\s+)?later(?:\s+version)?', re.IGNORECASE)

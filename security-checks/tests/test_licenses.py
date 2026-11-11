@@ -156,6 +156,22 @@ def test_classificadores_gnu_viram_spdx():
     for texto, esperado in casos.items():
         assert L.termos(texto) == esperado, (texto, L.termos(texto))
 
+def test_classificadores_permissivos_da_allowlist_viram_spdx():
+    # títulos da lista oficial (pypa/trove-classifiers); o "/" do zlib/libpng não pode separar em dois termos
+    casos = {
+        "MIT No Attribution License (MIT-0)": ["mit-0"],
+        "CMU License (MIT-CMU)": ["mit-cmu"],
+        "Zero-Clause BSD (0BSD)": ["0bsd"],
+        "Blue Oak Model License (BlueOak-1.0.0)": ["blueoak-1.0.0"],
+        "CC0 1.0 Universal (CC0 1.0) Public Domain Dedication": ["cc0-1.0"],
+        "zlib/libpng License": ["zlib"],
+    }
+    for texto, esperado in casos.items():
+        assert L.termos(texto) == esperado, (texto, L.termos(texto))
+    # aws-lambda-powertools 3.x declara os dois classificadores
+    assert L.fora_da_lista("MIT License; MIT No Attribution License (MIT-0)", {"mit", "mit-0"}) == []
+    assert L.fora_da_lista("MIT License; MIT No Attribution License (MIT-0)", {"mit"}) == ["mit-0"]
+
 def test_or_later_generico_nao_separa_e_or_continua_separando():
     assert len(L.termos("GNU Foo Public License v9 or later")) == 1
     assert L.termos("GPL-2.0-or-later") == ["gpl-2.0-or-later"]
@@ -250,6 +266,21 @@ def test_allowlist_padrao_aceita_licencas_de_saas():
     py = pip_json(("psycopg2-binary", "GNU Library or Lesser General Public License (LGPL)"),
                   ("certifi", "Mozilla Public License 2.0 (MPL 2.0)"), ("paramiko", "LGPL-2.1"))
     assert run(["pip", "--allow", ALLOW_PADRAO], py).returncode == 0
+
+def test_allowlist_padrao_aceita_classificadores_permissivos_do_pypi(tmp_path):
+    # caminho do check python: METADATA -> modo site (classificadores juntados com "; ") -> modo pip
+    site = tmp_path / "site-packages"; site.mkdir()
+    _dist(site, "aws_lambda_powertools", "3.38.0",
+          "Classifier: License :: OSI Approved :: MIT License\n"
+          "Classifier: License :: OSI Approved :: MIT No Attribution License (MIT-0)\n")
+    for i, titulo in enumerate(("CMU License (MIT-CMU)", "Zero-Clause BSD (0BSD)",
+                                "Blue Oak Model License (BlueOak-1.0.0)", "zlib/libpng License")):
+        _dist(site, f"p{i}", "1.0", f"Classifier: License :: OSI Approved :: {titulo}\n")
+    _dist(site, "cc0", "1.0", "Classifier: License :: CC0 1.0 Universal (CC0 1.0) Public Domain Dedication\n")
+    inv = run(["site", str(site)])
+    assert inv.returncode == 0, inv.stderr
+    r = run(["pip", "--allow", ALLOW_PADRAO], inv.stdout)
+    assert r.returncode == 0, r.stdout
 
 def test_allowlist_padrao_segue_bloqueando_uso_em_rede_e_gpl():
     for lic in ("AGPL-3.0-only", "SSPL-1.0", "BUSL-1.1", "OSL-3.0", "EUPL-1.2", "GPL-3.0-only", "CC-BY-NC-4.0"):
