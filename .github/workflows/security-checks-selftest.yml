@@ -21,6 +21,9 @@ jobs:
           python-version: |
             3.10
             3.12
+      # O workflow central depende disso: com várias versões, o python3 é a última da lista (o padrão).
+      - name: python3 é a última versão da lista
+        run: python3 -I -S -c 'import sys; assert sys.version_info[:2] == (3, 12), sys.version'
       - name: Instalar bats e shellcheck
         run: |
           set -euo pipefail

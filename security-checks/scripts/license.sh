@@ -418,12 +418,13 @@ py_checar() { # $1 = dir do projeto, $2 = dir temporário (já criado), $3 = int
 
 PY_USADOS="|"
 while IFS= read -r d; do
+  ver="$(py_versao_de "$(rel "$d")")"; py=""; rot=python
+  [ -z "$ver" ] || PY_USADOS="$PY_USADOS$(rel "$d")|"
   if { [ -f "$d/Pipfile" ] || [ -f "$d/Pipfile.lock" ]; } && [ ! -f "$d/pyproject.toml" ]; then
     resumo "❌ licença: $(rel "$d"): pipenv não suportado (Pipfile)"; falhou=1; checados=$((checados+1)); continue
   fi
-  ver="$(py_versao_de "$(rel "$d")")"; py=""; rot=python
   if [ -n "$ver" ]; then
-    PY_USADOS="$PY_USADOS$(rel "$d")|"; rot="python $ver"
+    rot="python $ver"
     py="$(command -v "python$ver" || true)"
     if [ -z "$py" ]; then
       resumo "❌ licença: $(rel "$d") ($rot): python$ver, pedido em license.python, não está instalado no runner"

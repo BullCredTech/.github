@@ -742,11 +742,27 @@ PYX
   [[ "$output" == *"python3.99"* ]] || return 1
 }
 
+@test "license.python: projeto na raiz do repo casa com path ." {
+  echo "six" > "$REPO/requirements.txt"
+  run bash "$SCRIPT" check "$REPO" "$ALLOW" "" ".=3.99"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"❌ licença: . (python 3.99)"* ]] || return 1
+  [[ "$output" != *"⚠️"* ]] || return 1
+}
+
 @test "license.python: caminho que não é projeto Python só avisa" {
   echo "# docs" > "$REPO/README.md"
   run bash "$SCRIPT" check "$REPO" "$ALLOW" "" "sumiu=3.10"
   [ "$status" -eq 0 ]
   [[ "$output" == *"⚠️ license.python: sumiu"* ]] || return 1
+}
+
+@test "license.python: projeto com Pipfile reprova pelo Pipfile, sem o aviso de caminho sem projeto" {
+  mkdir -p "$REPO/svc"; printf '[packages]\nsix = "*"\n' > "$REPO/svc/Pipfile"
+  run bash "$SCRIPT" check "$REPO" "$ALLOW" "" "svc=3.10"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"pipenv não suportado"* ]] || return 1
+  [[ "$output" != *"⚠️"* ]] || return 1
 }
 
 # Um python3.X no PATH diferente do python3 padrão (no selftest, o 3.10 instalado ao lado do 3.12).

@@ -155,6 +155,7 @@ O job **não executa código do repo**: não roda `npm`/`yarn` com scripts, não
 
 - O job de licença ainda **instala pacotes de terceiros** no runner (sem executar scripts de instalação, mas wheels podem carregar arquivos que são colocados no ambiente) e roda ferramentas que resolvem dependências. A mitigação é: só wheels, sem scripts, runner descartável, credenciais não persistidas e verificação de integridade do verificador antes de avaliar.
 - O job de licença tem `id-token: write`, para o login no CodeArtifact. Ele instala as dependências do PR sem scripts e neutraliza as configurações que executariam código do repo; se algo escapar disso, o token OIDC do job vale para qualquer role que confie no repo.
+- Python: uma dependência com marcador de ambiente que não vale no ambiente do check (Linux x86_64, na versão do Python do projeto) não é instalada e, por isso, não entra no inventário. O check só enxerga um ambiente; marcadores para outra plataforma ou versão dependem da revisão do PR.
 - Supressões inline são permitidas e só **visíveis**, não bloqueadas: o controle real é a revisão do PR.
 - Os checks dependem do registro de pacotes e dos downloads das ferramentas (seção 9).
 - A lista de licenças é um insumo técnico, não uma decisão jurídica: licenças com restrições devem ser avaliadas caso a caso e entrar por exceção.
