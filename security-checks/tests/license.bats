@@ -577,7 +577,7 @@ walk_fixture() {
   [ "$status" -ne 0 ]
   [ ! -e "$marker" ]
   [[ "$output" == *"dependência sem wheel"* ]] || return 1
-  [[ "$output" == *"peça exceção"* ]] || return 1
+  [[ "$output" == *"license.python"* ]] || return 1
   [[ "$output" != *"código-fonte:"* ]] || return 1
 }
 
@@ -713,4 +713,93 @@ PYX
   ORG_SECURITY_SHA="$CSHA" PATH="$SHIMS:$PATH" run bash "$C/security-checks/scripts/license.sh" check "$REPO" "$ALLOW" ""
   rm -rf "$C"
   [ "$status" -ne 0 ]; [[ "$output" == *"verificador alterado durante o job"* ]] || return 1
+}
+
+# ---------- license.python: Python do check por projeto ----------
+@test "pyversions: versões únicas e em ordem, com o padrão 3.12 por último" {
+  run bash "$SCRIPT" pyversions "a=3.11;b=3.10;c=3.11;d/e=3.12;.=3.9"
+  [ "$status" -eq 0 ]
+  [ "$output" = "$(printf 'versions<<FIM_VERSOES\n3.9\n3.10\n3.11\n3.12\nFIM_VERSOES')" ]
+  run bash "$SCRIPT" pyversions ""
+  [ "$status" -eq 0 ]
+  [ "$output" = "$(printf 'versions<<FIM_VERSOES\n3.12\nFIM_VERSOES')" ]
+}
+
+@test "pyversions e check: license.python malformado sai com 2" {
+  for s in '../x=3.10' 'a/../b=3.10' 'a=3.10;' 'a=310' 'a=3.10,b=3.11' 'a=3.10;$(touch x)=3.10' '=3.10' 'a=3.10=3.11' "$(printf 'a=3.10\nb=3.11')"; do
+    run bash "$SCRIPT" pyversions "$s"
+    [ "$status" -eq 2 ] || { echo "pyversions aceitou: $s"; return 1; }
+    run bash "$SCRIPT" check "$REPO" "$ALLOW" "" "$s"
+    [ "$status" -eq 2 ] || { echo "check aceitou: $s"; return 1; }
+  done
+}
+
+@test "license.python: interpretador pedido e ausente no runner reprova" {
+  mkdir -p "$REPO/svc"; echo "six" > "$REPO/svc/requirements.txt"
+  run bash "$SCRIPT" check "$REPO" "$ALLOW" "" "svc=3.99"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"❌ licença: svc (python 3.99)"* ]] || return 1
+  [[ "$output" == *"python3.99"* ]] || return 1
+}
+
+@test "license.python: projeto na raiz do repo casa com path ." {
+  echo "six" > "$REPO/requirements.txt"
+  run bash "$SCRIPT" check "$REPO" "$ALLOW" "" ".=3.99"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"❌ licença: . (python 3.99)"* ]] || return 1
+  [[ "$output" != *"⚠️"* ]] || return 1
+}
+
+@test "license.python: caminho que não é projeto Python só avisa" {
+  echo "# docs" > "$REPO/README.md"
+  run bash "$SCRIPT" check "$REPO" "$ALLOW" "" "sumiu=3.10"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"⚠️ license.python: sumiu"* ]] || return 1
+}
+
+@test "license.python: projeto com Pipfile reprova pelo Pipfile, sem o aviso de caminho sem projeto" {
+  mkdir -p "$REPO/svc"; printf '[packages]\nsix = "*"\n' > "$REPO/svc/Pipfile"
+  run bash "$SCRIPT" check "$REPO" "$ALLOW" "" "svc=3.10"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"pipenv não suportado"* ]] || return 1
+  [[ "$output" != *"⚠️"* ]] || return 1
+}
+
+# Um python3.X no PATH diferente do python3 padrão (no selftest, o 3.10 instalado ao lado do 3.12).
+outro_python() {
+  local padrao v
+  padrao="$(python3 -I -S -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
+  for v in 3.9 3.10 3.11 3.12 3.13 3.14; do
+    if [ "$v" != "$padrao" ] && command -v "python$v" >/dev/null; then echo "$v"; return 0; fi
+  done
+  return 1
+}
+make_wheel() { # $1 = diretório de saída, $2 = nome, $3 = tag do wheel (ex.: py3-none-any, cp310-none-any)
+  python3 - "$1" "$2" "$3" <<'PYX'
+import sys, zipfile
+out, nome, tag = sys.argv[1:4]
+di = f"{nome}-1.0.dist-info"
+with zipfile.ZipFile(f"{out}/{nome}-1.0-{tag}.whl", "w") as z:
+    z.writestr(f"{nome}/__init__.py", "")
+    z.writestr(f"{di}/METADATA", f"Metadata-Version: 2.1\nName: {nome}\nVersion: 1.0\nLicense-Expression: MIT\n")
+    z.writestr(f"{di}/WHEEL", f"Wheel-Version: 1.0\nGenerator: t\nRoot-Is-Purelib: true\nTag: {tag}\n")
+    z.writestr(f"{di}/RECORD", f"{nome}/__init__.py,,\n{di}/METADATA,,\n{di}/WHEEL,,\n{di}/RECORD,,\n")
+PYX
+}
+
+@test "license.python: o projeto configurado resolve no Python pedido; o resto segue no padrão" {
+  v="$(outro_python)" || { echo "nenhum python3.X além do padrão no PATH"; return 1; }
+  mkdir -p "$REPO/modelo" "$REPO/api" "$SHIMS/idx"
+  # wheel publicado só para aquela versão, como o numpy 1.24 (sem wheel para o 3.12)
+  make_wheel "$SHIMS/idx" sovelho "cp${v/./}-none-any"
+  make_wheel "$SHIMS/idx" qualquer py3-none-any
+  echo "sovelho==1.0" > "$REPO/modelo/requirements.txt"
+  echo "qualquer==1.0" > "$REPO/api/requirements.txt"
+  PIP_NO_INDEX=1 PIP_FIND_LINKS="$SHIMS/idx" run bash "$SCRIPT" check "$REPO" "$ALLOW" ""
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"❌ licença: modelo (python)"* ]] || return 1
+  PIP_NO_INDEX=1 PIP_FIND_LINKS="$SHIMS/idx" run bash "$SCRIPT" check "$REPO" "$ALLOW" "" "modelo=$v"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"✅ licença: modelo (python $v)"* ]] || return 1
+  [[ "$output" == *"✅ licença: api (python)"* ]] || return 1
 }

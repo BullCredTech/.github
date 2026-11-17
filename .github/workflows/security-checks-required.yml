@@ -31,6 +31,7 @@ jobs:
       docs_only: ${{ steps.changes.outputs.docs_only }}
       config_ok: ${{ steps.config.outputs.config_ok }}
       license_extra: ${{ steps.config.outputs.license_extra }}
+      license_python: ${{ steps.config.outputs.license_python }}
       semgrep_extra: ${{ steps.config.outputs.semgrep_extra }}
       skip: ${{ steps.config.outputs.skip }}
       central_sha: ${{ steps.central.outputs.sha }}
@@ -271,9 +272,17 @@ jobs:
           REGION: ${{ steps.ca.outputs.region }}
           REPOSITORIES: ${{ steps.ca.outputs.repositories }}
         run: bash .org-security/security-checks/scripts/codeartifact.sh login
+      # Versões de license.python (projetos que rodam em outro Python) e a padrão por último, que fica
+      # sendo o python3 do job: é ela que roda os scripts do verificador.
+      - id: pyv
+        if: steps.eco.outputs.python == 'true' || steps.eco.outputs.flutter == 'true'
+        env:
+          LICENSE_PYTHON: ${{ needs.prepare.outputs.license_python }}
+        run: bash .org-security/security-checks/scripts/license.sh pyversions "$LICENSE_PYTHON" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         if: steps.eco.outputs.python == 'true' || steps.eco.outputs.flutter == 'true'
-        with: { python-version: '3.12' }
+        with:
+          python-version: ${{ steps.pyv.outputs.versions }}
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         if: steps.eco.outputs.go == 'true'
         with: { go-version: 'stable' }
@@ -284,5 +293,6 @@ jobs:
         if: steps.co.outcome == 'success'
         env:
           EXTRA: ${{ needs.prepare.outputs.license_extra }}
+          LICENSE_PYTHON: ${{ needs.prepare.outputs.license_python }}
           ORG_SECURITY_SHA: ${{ needs.prepare.outputs.central_sha }}
-        run: bash .org-security/security-checks/scripts/license.sh check "$GITHUB_WORKSPACE" .org-security/security-checks/license-allowlist.txt "$EXTRA"
+        run: bash .org-security/security-checks/scripts/license.sh check "$GITHUB_WORKSPACE" .org-security/security-checks/license-allowlist.txt "$EXTRA" "$LICENSE_PYTHON"

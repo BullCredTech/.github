@@ -269,3 +269,90 @@ EOT
   [ "$status" -eq 0 ]
   [[ "$output" == *"license_extra=GPL-2.0-or-later;LGPL-3.0-only;AGPL-3.0-or-later;GPL-2.0+"* ]] || return 1
 }
+
+# --- license.python: versão do Python do check por projeto ---
+
+linha() { printf '%s\n' "$output" | grep -qx -- "$1"; }
+
+@test "license.python: emite caminho=versão na ordem declarada" {
+  cfg <<'EOT'
+version: 1
+license:
+  python:
+    - path: src/ml/modelo-a
+      version: "3.10"
+    - path: .
+      version: "3.11"
+EOT
+  run bash "$SCRIPT" "$REPO"
+  [ "$status" -eq 0 ]
+  linha "license_python=src/ml/modelo-a=3.10;.=3.11"
+}
+
+@test "license.python ausente: license_python vazio, com e sem arquivo" {
+  run bash "$SCRIPT" "$REPO"
+  [ "$status" -eq 0 ]
+  linha "license_python="
+  printf 'version: 1\n' > "$REPO/.github/security-checks.yml"
+  run bash "$SCRIPT" "$REPO"
+  [ "$status" -eq 0 ]
+  linha "license_python="
+}
+
+@test "license.python: versão sem aspas (o YAML lê 3.10 como 3.1) falha com a dica" {
+  printf 'version: 1\nlicense:\n  python:\n    - path: svc\n      version: 3.10\n' > "$REPO/.github/security-checks.yml"
+  run bash "$SCRIPT" "$REPO"; falha "aspas"
+}
+
+@test "license.python: versão fora de 3.9 a 3.14 falha" {
+  for v in '"3.8"' '"3"' '"3.10.1"' '"2.7"' '"3.15"' '"3.1"' '" 3.10"' '"3.10 "' '""' '"3.x"'; do
+    printf 'version: 1\nlicense:\n  python:\n    - path: svc\n      version: %s\n' "$v" > "$REPO/.github/security-checks.yml"
+    run bash "$SCRIPT" "$REPO"
+    [ "$status" -eq 2 ] || { echo "passou: $v"; return 1; }
+  done
+  for v in 3.9 3.10 3.12 3.14; do
+    printf 'version: 1\nlicense:\n  python:\n    - path: svc\n      version: "%s"\n' "$v" > "$REPO/.github/security-checks.yml"
+    run bash "$SCRIPT" "$REPO"
+    [ "$status" -eq 0 ] || { echo "recusou: $v"; return 1; }
+  done
+}
+
+@test "license.python: caminho inválido falha" {
+  for p in '"../x"' '"/abs"' '"a/../b"' '"a/./b"' '"a/"' '"a//b"' '"a/*"' '"*"' '""' '"a b"' '"a;b"' '"a=b"' '"./a"' '".."' '"a,b"'; do
+    printf 'version: 1\nlicense:\n  python:\n    - path: %s\n      version: "3.10"\n' "$p" > "$REPO/.github/security-checks.yml"
+    run bash "$SCRIPT" "$REPO"
+    [ "$status" -eq 2 ] || { echo "passou: $p"; return 1; }
+  done
+  for p in svc src/ml/modelo_2_1 . a.b/c-d; do
+    printf 'version: 1\nlicense:\n  python:\n    - path: "%s"\n      version: "3.10"\n' "$p" > "$REPO/.github/security-checks.yml"
+    run bash "$SCRIPT" "$REPO"
+    [ "$status" -eq 0 ] || { echo "recusou: $p"; return 1; }
+  done
+}
+
+@test "license.python: caminho repetido falha" {
+  cfg <<'EOT'
+version: 1
+license:
+  python:
+    - {path: svc, version: "3.10"}
+    - {path: svc, version: "3.11"}
+EOT
+  run bash "$SCRIPT" "$REPO"; falha "repetido"
+}
+
+@test "license.python: tipos errados, item incompleto e chave desconhecida falham" {
+  for c in \
+    'license: {python: "3.10"}' \
+    'license: {python: {path: svc, version: "3.10"}}' \
+    'license: {python: [svc]}' \
+    'license: {python: [{path: svc}]}' \
+    'license: {python: [{version: "3.10"}]}' \
+    'license: {python: [{path: 1, version: "3.10"}]}' \
+    'license: {python: [{path: [svc], version: "3.10"}]}' \
+    'license: {python: [{path: svc, version: "3.10", reason: "motivo bem longo"}]}'; do
+    printf 'version: 1\n%s\n' "$c" > "$REPO/.github/security-checks.yml"
+    run bash "$SCRIPT" "$REPO"
+    [ "$status" -eq 2 ] || { echo "passou: $c"; return 1; }
+  done
+}

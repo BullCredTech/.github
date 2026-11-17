@@ -20,7 +20,7 @@ q() { yq "$1" "$f" 2>/dev/null || erro "não foi possível ler o YAML (${2:-estr
 if [ -L "$f" ]; then erro "o arquivo não pode ser symlink"; fi
 
 if [ ! -e "$f" ]; then
-  printf '%s\n' config_present=false docs_paths= license_extra= semgrep_extra= skip=
+  printf '%s\n' config_present=false docs_paths= license_extra= license_python= semgrep_extra= skip=
   exit 0
 fi
 
@@ -55,8 +55,16 @@ done
 
 desconhecidas=$(q '(keys - ["version","docs_paths","license","semgrep","skip"]) | join(",")')
 [ -z "$desconhecidas" ] || erro "chave desconhecida: $desconhecidas"
-lic_desc=$(q '((.license // {}) | keys - ["extra_allowed"]) | join(",")')
+lic_desc=$(q '((.license // {}) | keys - ["extra_allowed","python"]) | join(",")')
 [ -z "$lic_desc" ] || erro "chave desconhecida em license: $lic_desc"
+[ "$(q '.license.python == null or ((.license.python | tag) == "!!seq" and ([.license.python[] | select(tag != "!!map")] | length == 0))')" = "true" ] \
+  || erro "license.python precisa ser uma lista de itens"
+[ "$(q '[(.license.python // [])[] | ((keys - ["path","version"]) | length)] | map(select(. > 0)) | length')" = "0" ] \
+  || erro "chave desconhecida em license.python"
+[ "$(q '[(.license.python // [])[] | .path | select(tag != "!!str")] | length')" = "0" ] \
+  || erro "license.python: todo item precisa de path (texto)"
+[ "$(q '[(.license.python // [])[] | .version | select(tag != "!!str")] | length')" = "0" ] \
+  || erro "license.python: version precisa ser texto entre aspas, como \"3.10\" (sem aspas o YAML lê 3.1)"
 sg_desc=$(q '((.semgrep // {}) | keys - ["extra_configs"]) | join(",")')
 [ -z "$sg_desc" ] || erro "chave desconhecida em semgrep: $sg_desc"
 
@@ -70,6 +78,23 @@ done < <(q '(.docs_paths // [])[]')
 while IFS= read -r c; do
   [[ "$c" =~ ^[A-Za-z0-9.+-]+$ ]] || erro "license.extra_allowed: id inválido: '$c'"
 done < <(q '(.license.extra_allowed // [])[]')
+
+# license.python: Python do check de licença por projeto, para quem roda em outra versão que não a padrão.
+# path é o diretório do projeto como o resumo do job mostra (relativo à raiz, ou "."); só segmentos literais.
+n=$(q '(.license.python // []) | length')
+lic_py=(); vistos="|"
+for ((i = 0; i < n; i++)); do
+  p=$(q ".license.python[$i].path")
+  v=$(q ".license.python[$i].version")
+  if [ "$p" != "." ]; then
+    [[ "$p" =~ ^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$ ]] || erro "license.python: path inválido: '$p'"
+    [[ ! "$p" =~ (^|/)\.+(/|$) ]] || erro "license.python: path sem segmentos '.' ou '..': '$p'"
+  fi
+  [[ "$v" =~ ^3\.(9|1[0-4])$ ]] || erro "license.python: version suportada vai de 3.9 a 3.14: '$v'"
+  case "$vistos" in *"|$p|"*) erro "license.python: path repetido: '$p'" ;; esac
+  vistos="$vistos$p|"
+  lic_py+=("$p=$v")
+done
 
 # semgrep.extra_configs: só regras do registro
 while IFS= read -r c; do
@@ -94,6 +119,10 @@ done
 
 docs_paths=$(q '(.docs_paths // []) | join(",")')
 license_extra=$(q '(.license.extra_allowed // []) | join(";")')
+license_python=""
+if [ "${#lic_py[@]}" -gt 0 ]; then
+  license_python=$(printf '%s\n' "${lic_py[@]}" | paste -sd';' -)
+fi
 semgrep_extra=$(q '(.semgrep.extra_configs // []) | map("--config " + .) | join(" ")')
 skip_out=""
 if [ "${#skips[@]}" -gt 0 ]; then
@@ -103,5 +132,6 @@ fi
 echo "config_present=true"
 echo "docs_paths=$docs_paths"
 echo "license_extra=$license_extra"
+echo "license_python=$license_python"
 echo "semgrep_extra=$semgrep_extra"
 echo "skip=$skip_out"
