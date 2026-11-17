@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # Checagem de licença por subprojeto. FALHA FECHADO: nunca fica verde sem ter inventariado o que o repo declara.
 #   license.sh detect <raiz>                       -> node=,python=,go=,flutter= (true|false)
-#   license.sh check <raiz> <allowlist> <extras>   -> roda as ferramentas e falha se algo estiver fora
+#   license.sh check <raiz> <allowlist> <extras> [pythons] -> roda as ferramentas e falha se algo estiver fora
+#   license.sh pyversions <pythons>                -> versões para o setup-python (formato do $GITHUB_OUTPUT)
 #   license.sh pyfiltro <nome-de-arquivo> [dir]    -> skip|install (arquivos requirements de dev/test são pulados)
 #   license.sh npmwalk <raiz>                      -> inventário JSON do node_modules (sem rede, sem instalar)
 # Extras: SPDX separados por ';' (license.extra_allowed do repo, já validado por config.sh).
+# Pythons: caminho=versão separados por ';' (license.python do repo, já validado por config.sh).
 # Nada do repo escaneado é executado via eval/source; o npm/yarn rodam com --ignore-scripts.
 # Importante: dentro de `if f` / `f || ...` o `set -e` NÃO vale, então toda função usada assim
 # tem `|| return 1` explícito depois de cada comando que importa.
@@ -32,6 +34,32 @@ py_filtro() { # $1 = nome do arquivo, $2 = "dir" (opcional)
 }
 
 if [ "$cmd" = "pyfiltro" ]; then py_filtro "${2:?}" "${3:-}"; exit 0; fi
+
+# Python padrão do check. Vai por último na lista do setup-python, para ser o python3 do job: é ele que
+# roda os scripts do verificador. Os projetos de license.python só criam o venv com a versão deles.
+PY_PADRAO=3.12
+# license.python já vem validado pelo config.sh; aqui só o formato, para falhar fechado se vier outra coisa.
+PY_PYTHONS_RE='^(\.|[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*)=3\.[0-9]{1,2}$'
+py_spec_ok() { # $1 = "caminho=versão;..." (vazio = nada configurado)
+  local e
+  [ -n "$1" ] || return 0
+  [[ "$1" != *$'\n'* ]] || return 1
+  while IFS= read -r e; do
+    [[ "$e" =~ $PY_PYTHONS_RE ]] || return 1
+    [[ "${e%=*}" == . || ! "${e%=*}" =~ (^|/)\.+(/|$) ]] || return 1
+  done <<< "${1//;/$'\n'}"
+}
+
+if [ "$cmd" = "pyversions" ]; then
+  py_spec_ok "${2:-}" || { echo "license.python malformado" >&2; exit 2; }
+  echo "versions<<FIM_VERSOES"
+  if [ -n "${2:-}" ]; then
+    printf '%s\n' "${2//;/$'\n'}" | sed 's/.*=//' | { grep -vxF "$PY_PADRAO" || true; } | sort -t. -k1,1n -k2,2n -u
+  fi
+  echo "$PY_PADRAO"
+  echo "FIM_VERSOES"
+  exit 0
+fi
 
 root="${2:?}"
 
@@ -184,7 +212,8 @@ SYS_PY="$(command -v python3 || true)"
 export YARN_IGNORE_PATH=1          # ignora `yarn-path` do .yarnrc
 export npm_config_git=git          # ignora `git=./programa` do .npmrc (e as flags --git=git abaixo)
 integridade || { resumo "❌ licença: verificador alterado durante o job"; exit 1; }
-allowfile="${3:?}"; extras="${4:-}"
+allowfile="${3:?}"; extras="${4:-}"; pythons="${5:-}"
+py_spec_ok "$pythons" || { echo "license.python malformado" >&2; exit 2; }
 allow="$(grep -vE '^[[:space:]]*(#|$)' "$allowfile" | paste -sd ';' -)"
 # Pacotes npm sem licença no package.json, mas com licença no registry (ver o próprio arquivo). Vazio = sem lista.
 conhecidos="$(dirname "$allowfile")/license-known.txt"
@@ -288,13 +317,22 @@ done < <(achar package.json)
 py_instalar() { # $@ = argumentos -r <arquivo> (uma única chamada do pip: nenhum pip roda depois de instalar)
   local saida
   saida="$(pip install -q --only-binary=:all: "$@" 2>&1)" || {
-    msg "dependência sem wheel (build a partir do código-fonte não é permitido no check de licença): $(printf '%s' "$saida" | tail -5 | tr '\n' ' '); peça exceção"
+    msg "dependência sem wheel para este Python (build a partir do código-fonte não é permitido no check de licença): $(printf '%s' "$saida" | tail -5 | tr '\n' ' '); se o projeto roda em outra versão do Python, declare-a em license.python no .github/security-checks.yml"
     return 1
   }
 }
 
-py_checar() { # $1 = dir do projeto, $2 = dir temporário (já criado)
-  local d="$1" tmpd="$2" r n=0 lines pj_req="" total=0 inv rc=0 usa_uv=false
+# Versão de license.python para o projeto (caminho relativo, como no resumo); vazio = Python padrão.
+py_versao_de() {
+  local e
+  [ -n "$pythons" ] || return 0
+  while IFS= read -r e; do
+    if [ "${e%=*}" = "$1" ]; then echo "${e##*=}"; return 0; fi
+  done <<< "${pythons//;/$'\n'}"
+}
+
+py_checar() { # $1 = dir do projeto, $2 = dir temporário (já criado), $3 = interpretador do venv (vazio = SYS_PY)
+  local d="$1" tmpd="$2" py="${3:-$SYS_PY}" r n=0 lines pj_req="" total=0 inv rc=0 usa_uv=false
   local -a arqs=()
   cd "$d" || return 1
 
@@ -347,7 +385,7 @@ py_checar() { # $1 = dir do projeto, $2 = dir temporário (já criado)
   local -a rargs=()
   local -a sp=()
   integridade || return 1
-  "$SYS_PY" -m venv "$tmpd/venv" || return 1
+  "$py" -m venv "$tmpd/venv" || return 1
   # shellcheck disable=SC1091
   . "$tmpd/venv/bin/activate"
   pip install -q --only-binary=:all: --upgrade pip >/dev/null || return 1
@@ -378,26 +416,43 @@ py_checar() { # $1 = dir do projeto, $2 = dir temporário (já criado)
   "$SYS_PY" -I -S "$here/licenses.py" pip --allow "$allow" < "$inv"
 }
 
+PY_USADOS="|"
 while IFS= read -r d; do
   if { [ -f "$d/Pipfile" ] || [ -f "$d/Pipfile.lock" ]; } && [ ! -f "$d/pyproject.toml" ]; then
     resumo "❌ licença: $(rel "$d"): pipenv não suportado (Pipfile)"; falhou=1; checados=$((checados+1)); continue
   fi
+  ver="$(py_versao_de "$(rel "$d")")"; py=""; rot=python
+  if [ -n "$ver" ]; then
+    PY_USADOS="$PY_USADOS$(rel "$d")|"; rot="python $ver"
+    py="$(command -v "python$ver" || true)"
+    if [ -z "$py" ]; then
+      resumo "❌ licença: $(rel "$d") ($rot): python$ver, pedido em license.python, não está instalado no runner"
+      falhou=1; checados=$((checados+1)); continue
+    fi
+  fi
   tmpd="$(mktemp -d)"
-  if saida="$(py_checar "$d" "$tmpd" 2>&1)"; then
+  if saida="$(py_checar "$d" "$tmpd" "$py" 2>&1)"; then
     if [ "$(printf '%s\n' "$saida" | tail -1)" = NADA ]; then
-      resumo "ℹ️ $(rel "$d"): nenhuma dependência de produção declarada (python), nada a verificar"
+      resumo "ℹ️ $(rel "$d"): nenhuma dependência de produção declarada ($rot), nada a verificar"
     else
       printf '%s\n' "$saida"
-      resumo "✅ licença: $(rel "$d") (python)"
+      resumo "✅ licença: $(rel "$d") ($rot)"
       checados=$((checados+1))
     fi
   else
     printf '%s\n' "$saida"
-    resumo "❌ licença: $(rel "$d") (python)"; falhou=1
+    resumo "❌ licença: $(rel "$d") ($rot)"; falhou=1
     checados=$((checados+1))
   fi
   rm -rf "$tmpd"
 done < <(py_dirs)
+# Entrada de license.python sem projeto: só aviso. O arquivo vem da base, então o PR que apaga a pasta
+# não consegue tirar a entrada no mesmo PR.
+if [ -n "$pythons" ]; then
+  while IFS= read -r e; do
+    case "$PY_USADOS" in *"|${e%=*}|"*) ;; *) resumo "⚠️ license.python: ${e%=*} não é um projeto Python neste repo; a entrada não tem efeito" ;; esac
+  done <<< "${pythons//;/$'\n'}"
+fi
 
 # ---------------- Go ----------------
 go_checar() { # $1 = dir

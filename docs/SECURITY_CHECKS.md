@@ -69,6 +69,9 @@ license:
   extra_allowed:
     - MPL-2.0
     - CC-BY-4.0
+  python:
+    - path: services/modelo
+      version: "3.10"
 semgrep:
   extra_configs:
     - p/python
@@ -81,10 +84,11 @@ Regras de validação (arquivo inválido reprova os checks, com a causa na anota
 
 - o arquivo não pode ser vazio, nem link simbólico, nem YAML inválido, e a raiz precisa ser um mapa;
 - `version` precisa ser o **inteiro** `1` (não a string `"1"`);
-- chaves desconhecidas (no topo, em `license`, em `semgrep` e em cada item de `skip`) são recusadas;
+- chaves desconhecidas (no topo, em `license`, em `semgrep` e em cada item de `skip` e de `license.python`) são recusadas;
 - nenhuma string ou chave pode conter caracteres de controle (quebras de linha, por exemplo);
 - `docs_paths`: lista de textos, cada um no formato `diretorio/**`, com um ou mais segmentos literais (`A-Z a-z 0-9 . _ -`) seguidos de `**`; sem `/` inicial e sem segmento `.` ou `..`. Padrões amplos como `**`, `*`, `**/*`, `*.js` ou `handbook/*` são recusados (o `.md` em qualquer lugar já é regra embutida);
 - `license.extra_allowed`: lista de identificadores SPDX (`A-Z a-z 0-9 . + -`, ou `LicenseRef-...`); sem `*`, vírgula, ponto e vírgula, espaço ou texto vazio;
+- `license.python`: lista de itens com `path` e `version`, os dois obrigatórios. `path` é o diretório do projeto Python como aparece no resumo do job, relativo à raiz do repo (ou `.` para a própria raiz), com segmentos literais (`A-Z a-z 0-9 . _ -`), sem `/` inicial ou final, sem `*` e sem segmento `.` ou `..`; cada `path` aparece uma vez só. `version` vai **entre aspas** e vai de `"3.9"` a `"3.14"` (sem aspas, o YAML lê `3.10` como o número `3.1`). Seção 7;
 - `semgrep.extra_configs`: só regras do registro, no formato `p/...` ou `r/...`, com até 100 caracteres, sem `..` e sem barra no final (nada de opções ou caminhos locais);
 - `skip`: lista de itens com `check` (`semgrep`, `trivy` ou `license`) e `reason` com **pelo menos 10 caracteres que não sejam espaço**. **`gitleaks` não pode ser desligado.** Entradas repetidas são unificadas.
 
@@ -128,8 +132,10 @@ O job **não executa código do repo**: não roda `npm`/`yarn` com scripts, não
 
 ### Python
 
-- Só **wheels** (`pip install --only-binary=:all:`). Se alguma dependência não tem wheel, o check reprova com "dependência sem wheel ... peça exceção"; não há fallback para compilar a partir de código-fonte.
-- **Limitação conhecida:** hoje a única exceção para uma dependência sem wheel é `skip: license` no `.github/security-checks.yml`, que desliga a verificação de licença do repo inteiro (com `reason` escrito, revisado pelo `devops`). Não existe exceção por pacote; se isso virar um problema recorrente, peça ao `devops` para considerar uma exceção por pacote.
+- Só **wheels** (`pip install --only-binary=:all:`). Se alguma dependência não tem wheel para o Python do check, ele reprova com "dependência sem wheel para este Python"; não há fallback para compilar a partir de código-fonte.
+- **Versão do Python:** o padrão é o **3.12**. Um projeto que roda em outra versão (por exemplo, com um pino antigo que só publica wheel até o 3.11) declara a versão em `license.python` (seção 4), e o check daquele diretório instala as dependências num ambiente com essa versão. A cobertura não muda: o inventário e a avaliação são os mesmos, só o interpretador do ambiente é outro. Isso também deixa o inventário mais fiel, porque os marcadores de ambiente (`; python_version < "3.12"`) passam a ser avaliados na versão em que o projeto roda. Os scripts do verificador continuam rodando no 3.12. Se a versão pedida não estiver instalada no runner, o projeto reprova; uma entrada cujo `path` não é um projeto Python só gera aviso, porque o arquivo vem da base e o PR que apaga a pasta não consegue tirar a entrada no mesmo PR.
+- Como todo o `.github/security-checks.yml`, `license.python` vale depois do merge (seção 3). Se as dependências já estão na branch de destino, o próprio PR que adiciona a entrada ainda é avaliado com a base e reprova; nesse caso, fale com o time `devops`.
+- **Limitação conhecida:** para uma dependência sem wheel em **nenhuma** versão suportada, a única exceção é `skip: license` no `.github/security-checks.yml`, que desliga a verificação de licença do repo inteiro (com `reason` escrito, revisado pelo `devops`). Não existe exceção por pacote; se isso virar um problema recorrente, peça ao `devops` para considerar uma exceção por pacote.
 - O inventário de licenças é feito lendo só os metadados (`.dist-info`) do ambiente, com o interpretador do sistema em modo isolado (`-I -S`): nada instalado é importado nem executado, e arquivos `.pth` de wheels não são processados durante a avaliação. Os requisitos são instalados numa **única instalação** (as instalações das próprias ferramentas, `pip` e `uv`, acontecem antes dela); instalar é a etapa que pode rodar código de terceiros, e a integridade do verificador é conferida antes e depois.
 - Arquivos `requirements*.txt` (e `requirements/*.txt`) de produção são lidos; arquivos de desenvolvimento e teste são pulados (`requirements-dev.txt`, `requirements-test*.txt`, `dev-requirements*.txt`, e `dev.txt`, `test.txt`, `lint.txt`, `docs.txt` dentro de `requirements/`). Nomes como `requirements-devops.txt` **são** instalados.
 - Cada linha dos requirements passa por uma **lista de permissão**: especificadores de versão (`pacote`, `pacote[extra]==1.0`, `Django>=4.2,<5`, marcadores de ambiente após `;` e `--hash=...`) e inclusões `-r`/`-c` para arquivos dentro do mesmo projeto. Qualquer outra coisa reprova mostrando a linha: opções (`-e`, `--index-url`, `--extra-index-url`, `--find-links`, `--pre`, `--no-binary`...), URLs e referências diretas (`@`, `git+`, `file:`), caminhos locais e arquivos binários locais.
