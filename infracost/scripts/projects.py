@@ -93,27 +93,37 @@ def literal_tail(expr: str) -> str | None:
     return s
 
 
-def resolve_local_source(src: str, file_dir: str) -> str | None:
-    """Caminho (relativo à raiz do repo) de um `source` local, ou None se remoto."""
+def resolve_local_source(src: str, file_dir: str) -> list[str]:
+    """Candidatos (relativos à raiz do repo) a diretório de um `source` local, do mais próximo
+    ao mais distante de `file_dir`. Lista vazia se a fonte é remota."""
     interpolated = "${" in src
     # Com interpolação (${get_repo_root()}, ${local.repo_root}, ${dirname(...root.hcl)}), o que
-    # vem depois dela é tratado como caminho a partir da raiz; quem chama confere se o
-    # diretório existe e tem .tf, então um palpite errado só é descartado.
+    # vem depois dela é relativo à raiz do repo OU a um ancestral (o diretório do root.hcl, que
+    # num módulo de domínio fica em infra/). Quem chama fica com o primeiro candidato que existe
+    # e tem .tf, então um palpite errado só é descartado.
     tail = src[src.rfind("}") + 1:] if interpolated else src
     if interpolated and not tail.startswith("/"):
-        return None
+        return []
     # Remoto: registry, git, http, s3...
     if re.match(r"^[a-zA-Z][\w+.-]*::|^[a-z]+://|^git@|^tfr:|^[\w.-]+\.[a-z]{2,}/", tail):
-        return None
+        return []
     tail = tail.split("?", 1)[0]
+    # `dir//sub`: o Terragrunt copia `dir` inteiro e roda em `dir/sub`, que é o módulo de fato.
     if "//" in tail:
-        tail = tail.split("//", 1)[0]
+        head, sub = tail.split("//", 1)
+        tail = head.rstrip("/") + "/" + sub
     if interpolated:
-        # Interpolação de raiz do repo (get_repo_root, dirname(root.hcl), repo_root).
-        return norm(tail.lstrip("/"))
+        rel = tail.strip("/")
+        out: list[str] = []
+        d = file_dir
+        while True:
+            out.append(norm(posixpath.join(d, rel)))
+            if not d:
+                return out
+            d = posixpath.dirname(d)
     if tail.startswith("./") or tail.startswith("../"):
-        return norm(posixpath.join(file_dir, tail))
-    return None
+        return [norm(posixpath.join(file_dir, tail))]
+    return []
 
 
 class Tree:
@@ -144,9 +154,10 @@ class Tree:
                     for s in SOURCE_RE.findall(read(os.path.join(repo, d, f))):
                         tf_sources.append((d, s))
         for d, s in tf_sources:
-            target = resolve_local_source(s, d)
-            if target is not None and target != d and target in self.tf_dirs:
-                self.module_users.setdefault(target, set()).add(d)
+            for target in resolve_local_source(s, d):
+                if target != d and target in self.tf_dirs:
+                    self.module_users.setdefault(target, set()).add(d)
+                    break
         self.terraform_only = not self.leaves
         if self.terraform_only:
             used = set(self.module_users)
