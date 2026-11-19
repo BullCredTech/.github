@@ -428,7 +428,7 @@ Passos de admin, nesta ordem:
 7. **Ponte:** no ar e com acesso aos repos do piloto (procedimento na documentação interna da ponte). Ela precisa ler PRs, reviews e checks e re-executar jobs (*Pull requests: Read*, *Checks: Read*, *Actions: Read and write*). Sem a ponte, o gate ainda funciona, mas mudança humana de label exige *Re-run* manual e o merge de um breaking não gera rascunho no BMS.
 8. **Ruleset `changelog-required`** (*org Settings → Repository → Rulesets → New branch ruleset*):
    - **Enforcement:** **Evaluate** primeiro.
-   - **Target repositories:** os repos do piloto **por nome**, sem wildcard, pelo mesmo motivo do [gate de fim de semana](MERGE_GATE_FIM_DE_SEMANA_FERIADO.md).
+   - **Target repositories:** os repos do piloto **por nome**, sem wildcard: um padrão como `bull-module-*` incluiria automaticamente qualquer repo novo com o mesmo prefixo, sem decisão registrada.
    - **Target branches:** default branch (`main`).
    - **Regra:** *Require workflows to pass before merging*, com o workflow `BullCredTech/.github` → `.github/workflows/changelog.yml`, ref `refs/heads/main`.
    - **Bypass list:** *Organization admin*, para override de emergência com rastro auditável.

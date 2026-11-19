@@ -30,4 +30,5 @@ Basta colocar o arquivo equivalente na raiz (ou em `.github/`) do repo de destin
 O workflow `weekend-holiday-merge-gate.yml` precisa ser ativado em cada repo como **Required Workflow** via Settings → Code, planning, and automation → Required workflows (ou via API), e o status check `gate` referenciado no ruleset da org.
 
 O workflow `changelog.yml` é ativado do mesmo jeito, pelo ruleset `changelog-required`, só nos repos do piloto (ver [docs/CHANGELOG_TECH.md](docs/CHANGELOG_TECH.md#como-ativar)). O `changelog-digest.yml` roda neste próprio repo e depende dos secrets `SLACK_CHANGELOG_WEBHOOK` e `CHANGELOG_GH_TOKEN`.
+
 O workflow `infracost.yml` é chamado por `uses:` no repo de destino (não é Required Workflow): snippet e passo a passo em [`docs/INFRACOST.md`](docs/INFRACOST.md).
