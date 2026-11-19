@@ -9,7 +9,8 @@
 #   INCLUDE_DEPENDENTS  true|false: estima também os dependentes diretos (padrão: true)
 #   USAGE_FILE_NAME     nome do arquivo de uso por workspace (padrão: infracost-usage.yml)
 #
-# Saída em <dir de saída>: comment.md (corpo do comentário), has_projects (true|false).
+# Saída em <dir de saída>: comment.md (corpo do comentário), full.md (relatório sem corte,
+# para o resumo do job) e has_projects (true|false). Os três existem em todo caminho que sai com 0.
 # Nunca manda nada para o Infracost Cloud: só a Pricing API é chamada.
 set -euo pipefail
 
@@ -80,6 +81,9 @@ if [ "$has_projects" != "true" ]; then
     cat "$summary"
     rodape
   } > "$out/comment.md"
+  # O step chama `cat full.md` para o resumo do job: sem ele o job fica vermelho e o
+  # comentário de um push anterior não é atualizado.
+  cp "$out/comment.md" "$out/full.md"
   exit 0
 fi
 
