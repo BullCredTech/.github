@@ -91,7 +91,7 @@ test('breaking sem Flag, ou com Flag fora do formato <superfície>.<recurso>.<mu
   assert.equal(r.errors.length, 1);
   assert.match(r.errors[0], /exige o campo `Flag:`/);
 
-  // `-` fica de fora: o changes-api recusa (CHECK em flag_rules.key) e a ponte quebraria no merge.
+  // `-` fica de fora: o registro de mudanças programadas recusa e a ponte quebraria no merge.
   for (const flag of ['sdk.otp.disabled', 'api.', 'API.Campo.x', 'api.campo x.y', 'api.campo-x.remove', 'api..x', 'api', 'api.so_duas_partes', 'webhook.status']) {
     r = evaluate({ labels: ['cl:feat', 'partner:breaking'], body: BREAKING_BODY.replace('api.campo_x.remove', flag) });
     assert.equal(r.errors.length, 1, flag);

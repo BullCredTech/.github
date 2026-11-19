@@ -25,6 +25,7 @@
 
 <!--
 Campos lidos pelo changelog tech (docs/CHANGELOG_TECH.md no repo BullCredTech/.github).
+Só os repos do piloto checam estes campos. Nos outros, pode deixar em branco.
 Deixe em branco o que não se aplica, mas mantenha cada campo na sua linha.
 - Changelog: uma frase para o time interno sobre o que muda. Em branco, o digest usa o resumo do classificador ou o título.
 - Parceiro: frase para o parceiro. Só quando a label for partner:additive ou partner:breaking.

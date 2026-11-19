@@ -1,9 +1,7 @@
 {
   "owner": "BullCredTech",
   "repos": [
-    "bull-module-proposals",
-    "bull-module-auction",
-    "bull-module-receivables"
+    "bull-module-proposals"
   ],
   "baseBranch": "main",
   "timezone": "America/Sao_Paulo",

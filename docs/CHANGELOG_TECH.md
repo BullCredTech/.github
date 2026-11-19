@@ -14,7 +14,7 @@ A solução tem três camadas, e quase tudo é automático:
 |---|---|---|
 | **Classificador** | um agente LLM (o tech-agent ou o avaliador) | lê o diff e aplica as labels. Também mantém **um** comentário com o resumo e o texto para o parceiro |
 | **Esteira determinística** (este repo) | GitHub Actions, sem LLM | lê as labels, os campos e o comentário, bloqueia o merge quando falta algo e posta o digest |
-| **Ponte `changelog-bridge`** | Lambda no `bull-module-devops`, sem LLM | re-executa o gate quando alguém muda labels, descrição ou reviews e, no merge de um PR breaking, cria o rascunho da mudança programada no changes-api. Veja [A ponte](#a-ponte-changelog-bridge) |
+| **Ponte `changelog-bridge`** | serviço interno agendado, sem LLM | re-executa o gate quando alguém muda labels, descrição ou reviews e, no merge de um PR breaking, cria o rascunho da mudança programada no BMS. Veja [A ponte](#a-ponte-changelog-bridge) |
 
 O classificador **sugere**. Quem **bloqueia** é sempre uma regra determinística. A esteira não sabe qual LLM classificou: basta seguir o [contrato](#contrato-com-o-classificador).
 
@@ -27,19 +27,19 @@ O classificador **sugere**. Quem **bloqueia** é sempre uma regra determinístic
 | Exige uma label `cl:*` e uma `partner:*` em todo PR para `main` | Não classifica nem aplica labels: isso é do classificador ou de quem abre o PR |
 | Em `partner:breaking`, exige `Flag:` e `Docs:` | Não exige aprovação própria: vale a revisão normal do PR |
 | Posta o digest diário e o semanal no Slack | Não olha data: a vigência vive no registro de mudanças programadas |
-| Em `partner:breaking`, confere que a chave de `Flag:` aparece no código alterado pelo PR | Não verifica se a flag existe no changes-api: no merge, a [ponte](#a-ponte-changelog-bridge) cria a mudança programada com ela |
+| Em `partner:breaking`, confere que a chave de `Flag:` aparece no código alterado pelo PR | Não verifica se a flag existe: no merge, a [ponte](#a-ponte-changelog-bridge) cria a mudança programada com ela |
 | Lê o `summary` do comentário do classificador | |
 | | Não cria a mudança programada (é da ponte) e não publica o /changelog (é do sync no `bull-api-docs-gitbook`, depois do anúncio no BMS) |
 
 ### Repos do piloto
 
-Ficam em `scripts/changelog/config.json`:
+Ficam em `scripts/changelog/config.json`. Hoje, só um:
 
 - `bull-module-proposals`
-- `bull-module-auction`
-- `bull-module-receivables`
 
-O antigo `bull-api-receivables` foi renomeado para `bull-module-receivables`. A API REST segue o nome antigo, mas a busca não segue, então o config usa o nome novo. O `bull-lambda-webhook-sender` está arquivado desde 28/10/2026 e o código dele foi para o `bull-module-proposals`, por isso não entra no piloto.
+É a única API pública e documentada que o parceiro consome. Os webhooks para o parceiro também saem dele, porque o `bull-lambda-webhook-sender` está arquivado desde 28/10/2026 e o código foi para o `bull-module-proposals`.
+
+Os outros módulos (leilão, recebíveis etc.) não têm contrato público com parceiro e ficam fora. Quando um passar a ter, ele entra pelo passo a passo de [Repo novo no piloto](#manutenção): a esteira já trata vários repos.
 
 ## Labels
 
@@ -90,7 +90,7 @@ Um PR sem label e sem prefixo reconhecível vai para a seção "❔ Sem classifi
 
 ## Campos da descrição do PR
 
-O template da org (`.github/PULL_REQUEST_TEMPLATE.md`) traz a seção `## Changelog`:
+O template da org (`.github/PULL_REQUEST_TEMPLATE.md`) traz a seção `## Changelog`. Ele vale, a partir do merge, para **todo** repo da org sem template próprio, não só para o piloto. Fora do piloto, nenhum check lê esses campos e eles podem ficar em branco.
 
 ```
 Changelog:
@@ -121,11 +121,7 @@ Flag: api.contracts.remove_bank_code
 Docs: https://github.com/BullCredTech/bull-api-docs-gitbook/pull/123
 ```
 
-**Templates locais:** um template no próprio repo tem precedência sobre o da org. Três repos do piloto têm template próprio e precisam da mesma seção `## Changelog`, com as quatro linhas:
-
-- `bull-module-proposals/.github/pull_request_template.md`
-- `bull-module-auction/.github/pull_request_template.md`
-- `bull-module-receivables/.github/pull_request_template.md`
+**Template local:** um template no próprio repo tem precedência sobre o da org. O `bull-module-proposals` tem template próprio e precisa da mesma seção `## Changelog`, com as quatro linhas, em `.github/pull_request_template.md`.
 
 ### Nome da flag
 
@@ -139,7 +135,7 @@ Formato: **`<superfície>.<recurso>.<mudança>`**, em minúsculas, com dígitos 
 
 Exemplos: `api.contracts.remove_bank_code`, `api.simulate.strict_amount`, `webhook.proposal_status.new_payload`. Mais de três partes vale quando ajuda (`api.simulate.amount.strict`).
 
-- A chave é **única** no changes-api. Repetir a mesma chave em outro PR **anexa** esse PR à mesma mudança programada (é o jeito de entregar uma breaking em vários PRs). Por isso, antes de escolher, confira no BMS (Mudanças programadas) se a chave já existe.
+- A chave é **única** entre as mudanças programadas. Repetir a mesma chave em outro PR **anexa** esse PR à mesma mudança programada (é o jeito de entregar uma breaking em vários PRs). Por isso, antes de escolher, confira no BMS (Mudanças programadas) se a chave já existe.
 - A chave aparece **no código**, entre aspas: `isEnabled('api.contracts.remove_bank_code', origin.code)` ou `@PartnerFlags('api.contracts.remove_bank_code')`. É o que o gate procura.
 - O classificador sugere uma chave nesse formato quando marca `partner:breaking`.
 
@@ -155,7 +151,7 @@ O gate passa quando:
    - **a chave aparece no código alterado pelo PR**: entre aspas, numa linha adicionada de um arquivo que não é teste nem documentação (ex.: `isEnabled('api.contracts.remove_bank_code', origin.code)` ou `@PartnerFlags('api.contracts.remove_bank_code')`). Declarar `Flag:` sem usar a flag deixaria a breaking change ir direto para produção;
    - `Docs:` aponta para um PR do `BullCredTech/bull-api-docs-gitbook`.
 
-Só isso. O gate **não** exige aprovação própria (a revisão normal do PR basta) e **não** verifica se a flag existe no changes-api: no merge, a [ponte](#a-ponte-changelog-bridge) cria a mudança programada com essa flag no changes-api, ou anexa o PR à mudança viva que já tem a flag. Até a virada, a flag fica desligada e o código entra sem efeito.
+Só isso. O gate **não** exige aprovação própria (a revisão normal do PR basta) e **não** verifica se a flag existe: no merge, a [ponte](#a-ponte-changelog-bridge) cria a mudança programada com essa flag, ou anexa o PR à mudança viva que já tem a flag. Até a virada, a flag fica desligada e o código entra sem efeito.
 
 PR com base diferente de `main` (ex.: `staging`) não é avaliado: o gate passa direto. O gate **não olha data**. A vigência de uma breaking change vive no registro de mudanças programadas.
 
@@ -184,7 +180,7 @@ Na prática, **mudar label ou descrição não reavalia o gate sozinho.** Quem r
 | Quem | Quando | Demora |
 |---|---|---|
 | **Classificador** | logo depois de aplicar ou trocar labels (veja o [contrato](#c-re-executar-o-gate-depois-de-mudar-labels)) | segundos: é o caminho rápido |
-| **[Ponte](#a-ponte-changelog-bridge)** | quando labels, descrição ou reviews mudaram depois da última execução. Cobre as mudanças feitas por humanos | até ~5 min, o intervalo da Lambda |
+| **[Ponte](#a-ponte-changelog-bridge)** | quando labels, descrição ou reviews mudaram depois da última execução. Cobre as mudanças feitas por humanos | até ~5 min, o intervalo da ponte |
 | **Você**, para não esperar | quando quiser | na hora |
 
 Para re-executar à mão:
@@ -203,27 +199,26 @@ O re-run usa o estado atual do PR, porque o gate relê labels e descrição na A
 
 ## A ponte `changelog-bridge`
 
-É uma Lambda agendada no `bull-module-devops`, `bull-devops-production-fn-changelog-bridge`, que roda a cada 5 min dentro da VPC, para alcançar o changes-api, e fala com o GitHub por um GitHub App próprio. **Está sendo construída agora**: até ela entrar no ar, as funções abaixo não acontecem.
+Serviço interno agendado, fora deste repo. **Está sendo construído agora**: até ele entrar no ar, as funções abaixo não acontecem. Implantação, rede e operação estão na documentação interna da ponte.
 
-Ela faz três coisas:
+O que a esteira espera dela:
 
-1. **Re-executa o gate.** Nos PRs abertos para `main` dos repos do piloto, quando labels, descrição ou reviews mudaram depois da última execução do `changelog-gate`, ela re-executa o job. É o que cobre as mudanças humanas, já que workflow de ruleset só roda em `opened`, `synchronize` e `reopened`. O classificador continua re-executando o gate depois de rotular, porque é mais rápido que esperar o ciclo da ponte.
-2. **Cria o rascunho da mudança programada.** Num PR mergeado com `partner:breaking`, faz `POST /v1/admin/scheduled-changes` no changes-api com:
-   - `flag_keys`: a chave do `Flag:`;
-   - `source_prs`: a URL do PR;
-   - `docs_pr_url`: o `Docs:`;
+1. **Re-executar o gate.** Nos PRs abertos para `main` dos repos do piloto, quando labels, descrição ou reviews mudaram depois da última execução do `changelog-gate`, ela re-executa o job, em até ~5 min. É o que cobre as mudanças humanas, já que workflow de ruleset só roda em `opened`, `synchronize` e `reopened`. O classificador continua re-executando o gate depois de rotular, porque é mais rápido que esperar o ciclo da ponte.
+2. **Criar o rascunho da mudança programada.** Num PR mergeado com `partner:breaking`, ela cria o rascunho com:
+   - a chave do `Flag:`;
+   - a URL do PR;
+   - o `Docs:`;
    - os textos do [comentário do classificador](#b-um-comentário-sempre-o-mesmo), quando existir (`partner_text`, `migration_guide`, `docs`).
 
-   Se a flag já pertence a uma mudança viva, o changes-api só anexa o PR. A chamada é idempotente por URL de PR, então reprocessar não duplica nada.
-3. **Guarda cursor e estado próprios** (DynamoDB ou SSM), para não reprocessar.
+   Se a flag já pertence a uma mudança viva, o PR só é anexado a ela. Reprocessar o mesmo PR não duplica nada.
 
-Depois do merge, o fluxo segue no BMS e no changes-api, fora desta esteira:
+Depois do merge, o fluxo segue no BMS, fora desta esteira:
 
 1. O rascunho nasce com a vigência no aviso mínimo (hoje, 60 dias depois da criação).
 2. Alguém revisa no BMS o texto para o parceiro, o guia de migração, os endpoints e a data, e clica em **Anunciar**. É essa a aprovação voltada ao parceiro.
-3. Com o anúncio, a mudança vai para o /changelog (pelo sync do `bull-api-docs-gitbook`), as respostas afetadas passam a levar os headers `Deprecation` e `Sunset`, e o changes-api começa a régua de lembretes no Slack (T-30 e T-7).
+3. Com o anúncio, a mudança vai para o /changelog, as respostas afetadas passam a levar os headers `Deprecation` e `Sunset`, e começam os lembretes no Slack (T-30 e T-7).
 
-A ponte não usa secret deste repo: o GitHub App e o acesso ao changes-api ficam no `bull-module-devops`.
+A ponte não usa secret deste repo.
 
 ## O digest
 
@@ -236,6 +231,8 @@ O workflow é `.github/workflows/changelog-digest.yml` e a lógica fica em `scri
 | `workflow_dispatch` | o `mode` escolhido (`daily`/`weekly`) | a do modo, ou de `since` (ISO 8601) até agora |
 
 A janela termina às 09:00 de hoje, e não "agora". Assim um PR mergeado entre 09:00 e o horário real do cron, que o GitHub atrasa alguns minutos, sai só no digest do dia seguinte e não aparece duas vezes. Feriado não é tratado: o cron posta no feriado também, e a janela seguinte começa nele, sem buraco.
+
+Antes da ativação, sem `CHANGELOG_GH_TOKEN` ou `SLACK_CHANGELOG_WEBHOOK`, a execução agendada só deixa um aviso e termina verde. Disparada à mão, a falta do token é erro.
 
 **Fonte:** uma busca por repo do piloto (`is:pr is:merged base:main merged:<janela>`), com o token `CHANGELOG_GH_TOKEN`.
 
@@ -424,11 +421,11 @@ Passos de admin, nesta ordem:
 
 1. **Merge deste PR** no `BullCredTech/.github`.
 2. **Labels:** rodar `node scripts/changelog/setup-labels.js --dry-run`, revisar e rodar sem `--dry-run`. Precisa de permissão *triage* ou mais nos repos.
-3. **Templates locais:** adicionar a seção `## Changelog` nos três templates listados em [Campos da descrição do PR](#campos-da-descrição-do-pr).
+3. **Template local:** adicionar a seção `## Changelog` no template do `bull-module-proposals` (ver [Campos da descrição do PR](#campos-da-descrição-do-pr)).
 4. **Dependabot:** o PR do Dependabot não tem quem classifique, porque workflows disparados por ele não recebem os secrets. Em cada `dependabot.yml` do piloto, coloque `labels: ["dependencies", "cl:chore", "partner:none"]`. A lista **substitui** as labels padrão, por isso `dependencies` vai junto.
 5. **Secrets:** criar `SLACK_CHANGELOG_WEBHOOK` e `CHANGELOG_GH_TOKEN` neste repo (*Settings → Secrets and variables → Actions*).
 6. **Testar o digest:** *Actions → changelog-digest → Run workflow*, com `mode: weekly` e `dry_run: true`, e ler a mensagem no log. Depois, uma vez com `dry_run: false`, para validar o canal.
-7. **Ponte:** deploy da `changelog-bridge` no `bull-module-devops`, com o GitHub App instalado nos repos do piloto e o changes-api no ar. O App precisa ler PRs, reviews e checks e re-executar jobs (*Pull requests: Read*, *Checks: Read*, *Actions: Read and write*). Sem a ponte, o gate ainda funciona, mas mudança humana de label exige *Re-run* manual e o merge de um breaking não gera rascunho no BMS.
+7. **Ponte:** no ar e com acesso aos repos do piloto (procedimento na documentação interna da ponte). Ela precisa ler PRs, reviews e checks e re-executar jobs (*Pull requests: Read*, *Checks: Read*, *Actions: Read and write*). Sem a ponte, o gate ainda funciona, mas mudança humana de label exige *Re-run* manual e o merge de um breaking não gera rascunho no BMS.
 8. **Ruleset `changelog-required`** (*org Settings → Repository → Rulesets → New branch ruleset*):
    - **Enforcement:** **Evaluate** primeiro.
    - **Target repositories:** os repos do piloto **por nome**, sem wildcard, pelo mesmo motivo do [gate de fim de semana](MERGE_GATE_FIM_DE_SEMANA_FERIADO.md).
@@ -486,7 +483,7 @@ Para testar o gate no ruleset em **Evaluate**, abra um PR de teste num repo do p
 | `docsRepo` | repo onde o `Docs:` precisa apontar um PR |
 
 - Mudança aqui exige PR no `BullCredTech/.github`, protegido por CODEOWNERS.
-- **Repo novo no piloto:** `config.json` + token do digest + ruleset + labels (`setup-labels.js --repo <nome>`) + seção no template local + instalação do GitHub App da ponte e o repo na lista dela, no `bull-module-devops`.
+- **Repo novo no piloto:** `config.json` + token do digest + ruleset + labels (`setup-labels.js --repo <nome>`) + seção no template local + acesso da ponte ao repo (documentação interna da ponte).
 
 ## FAQ
 
@@ -500,7 +497,7 @@ O gate rodou antes do classificador aplicar as labels. O classificador re-execut
 Qualquer pessoa, na revisão normal do PR. Não existe lista de aprovadores. O parceiro só fica sabendo quando alguém Anunciar a mudança programada no BMS.
 
 **Mergeei um breaking. E agora?**
-A ponte cria o rascunho da mudança programada no changes-api. Abra no BMS, revise o texto para o parceiro, o guia de migração e a data, e clique em **Anunciar**. Sem o anúncio, a flag nunca vira e o parceiro nunca é avisado.
+A ponte cria o rascunho da mudança programada. Abra no BMS, revise o texto para o parceiro, o guia de migração e a data, e clique em **Anunciar**. Sem o anúncio, a flag nunca vira e o parceiro nunca é avisado.
 
 **E PR para `staging`?**
 O gate só avalia PR para `main`. Para outras bases ele passa direto.

@@ -6,7 +6,7 @@
 // Não exige aprovação própria: a revisão normal do PR aprova a classificação, e a aprovação voltada
 // ao parceiro acontece no BMS, ao Anunciar.
 // Não olha data: a vigência de uma breaking change vive no registro de mudanças programadas.
-// Não verifica se a flag existe no changes-api: no merge, a ponte (changelog-bridge) cria a mudança
+// Não verifica se a flag existe: no merge, a ponte (changelog-bridge) cria a mudança
 // programada com a flag, ou anexa o PR à mudança viva que já tem a flag. Mas verifica que a chave
 // aparece no CÓDIGO alterado pelo PR: declarar `Flag:` sem usar a flag deixaria a breaking change
 // ir direto para produção.
@@ -19,9 +19,8 @@ const DOC_URL = 'https://github.com/BullCredTech/.github/blob/main/docs/CHANGELO
 
 // Chave de flag de mudança programada: `<superfície>.<recurso>.<mudança>`, superfície `api` ou
 // `webhook`, partes em minúsculas, dígitos e `_` (ex.: `api.contracts.remove_bank_code`,
-// `webhook.proposal_status.new_payload`). É um subconjunto do formato do changes-api
-// (`^[a-z][a-z0-9]*(\.[a-z0-9_]+)+$`, CHECK em flag_rules.key): aceitar algo fora dele faria a
-// ponte receber 422 no merge. Sem ambiguidade de backtracking: cada parte começa com "." e "."
+// `webhook.proposal_status.new_payload`). É um subconjunto do formato aceito pelo registro de
+// mudanças programadas: aceitar algo fora dele faria a ponte ser recusada no merge. Sem ambiguidade de backtracking: cada parte começa com "." e "."
 // não está na classe.
 const FLAG_KEY_RE = /^(?:api|webhook)\.[a-z0-9_]+\.[a-z0-9_]+(?:\.[a-z0-9_]+)*$/;
 const FLAG_FORMAT = '`<superfície>.<recurso>.<mudança>`, com superfície `api` ou `webhook` (ex.: `api.contracts.remove_bank_code`)';

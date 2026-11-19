@@ -36,21 +36,38 @@ jobs:
     steps:
       # O GITHUB_TOKEN deste repo não enxerga os repos do piloto (privados). O digest usa um
       # token só de leitura de pull requests nesses repos.
-      - name: Confere o token de leitura dos repos do piloto
+      # Agendado e sem os secrets (esteira ainda não ativada): avisa e sai verde, em vez de falhar
+      # todo dia útil. Disparado à mão, falta de secret é erro: quem disparou quer o digest.
+      - name: Confere os secrets
+        id: secrets
         env:
           CHANGELOG_GH_TOKEN: ${{ secrets.CHANGELOG_GH_TOKEN }}
+          SLACK_CHANGELOG_WEBHOOK: ${{ secrets.SLACK_CHANGELOG_WEBHOOK }}
+          EVENT: ${{ github.event_name }}
         run: |
-          if [ -z "$CHANGELOG_GH_TOKEN" ]; then
+          faltam=()
+          [ -n "$CHANGELOG_GH_TOKEN" ] || faltam+=(CHANGELOG_GH_TOKEN)
+          if [ "$EVENT" = "schedule" ]; then
+            [ -n "$SLACK_CHANGELOG_WEBHOOK" ] || faltam+=(SLACK_CHANGELOG_WEBHOOK)
+            if [ "${#faltam[@]}" -gt 0 ]; then
+              echo "::warning::Digest não ativado: faltam ${faltam[*]}. Ver \"Como ativar\" em docs/CHANGELOG_TECH.md."
+              echo "ready=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          elif [ "${#faltam[@]}" -gt 0 ]; then
             echo "::error::Secret CHANGELOG_GH_TOKEN ausente (token só leitura de PRs nos repos do piloto). Ver docs/CHANGELOG_TECH.md."
             exit 1
           fi
+          echo "ready=true" >> "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        if: steps.secrets.outputs.ready == 'true'
         with:
           sparse-checkout: scripts/changelog
           persist-credentials: false
 
       - name: Monta e posta o digest
+        if: steps.secrets.outputs.ready == 'true'
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
         env:
           SLACK_CHANGELOG_WEBHOOK: ${{ secrets.SLACK_CHANGELOG_WEBHOOK }}
