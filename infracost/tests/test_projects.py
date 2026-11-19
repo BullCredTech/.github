@@ -180,3 +180,42 @@ def test_terraform_puro(tmp_path):
     h, _, env, _, _ = run(tmp_path, [("M", "modules/m/main.tf"), ("M", "stacks/db/main.tf")])
     assert h == ["stacks/app", "stacks/db"]
     assert env["terraform_only"] == "true"
+
+
+def modulo_de_dominio(root):
+    """Layout de bull-module-*: root.hcl em infra/, leaf aponta para `dirname(root.hcl)//stacks/x`."""
+    w(root, "infra/root.hcl", "locals {}\n")
+    w(root, "infra/accounts/production/account.hcl", "locals {}\n")
+    w(root, "infra/accounts/production/sa-east-1/region.hcl", "locals {}\n")
+    for env in ("production/sa-east-1", "staging/us-east-1"):
+        w(root, f"infra/accounts/{env}/storage/terms/main/terragrunt.hcl", LEAF +
+          'terraform {\n  source = "${dirname(find_in_parent_folders("root.hcl"))}//stacks/terms"\n}\n')
+        w(root, f"infra/accounts/{env}/compute/lambdas/sender/main/terragrunt.hcl", LEAF +
+          'terraform {\n  source = "${dirname(find_in_parent_folders("root.hcl"))}//stacks/sender"\n}\n')
+    w(root, "infra/stacks/terms/main.tf", 'resource "aws_s3_bucket" "x" {}\n')
+    w(root, "infra/stacks/sender/main.tf", 'module "fn" {\n  source = "../../modules/lambda_infra"\n}\n')
+    w(root, "infra/modules/lambda_infra/main.tf", 'resource "aws_lambda_function" "x" {}\n')
+    w(root, "apis/api/src/main.ts", "x\n")
+
+
+def test_stack_com_subdiretorio_e_root_hcl_em_infra(tmp_path):
+    for t in ("head", "base"):
+        modulo_de_dominio(tmp_path / t)
+    h, _, _, _, _ = run(tmp_path, [("M", "infra/stacks/terms/main.tf")], extra=["--root", "infra"])
+    assert sorted(h) == ["infra/accounts/production/sa-east-1/storage/terms/main",
+                         "infra/accounts/staging/us-east-1/storage/terms/main"]
+
+
+def test_modulo_usado_por_stack_de_dominio(tmp_path):
+    for t in ("head", "base"):
+        modulo_de_dominio(tmp_path / t)
+    h, _, _, _, _ = run(tmp_path, [("M", "infra/modules/lambda_infra/main.tf")], extra=["--root", "infra"])
+    assert sorted(h) == ["infra/accounts/production/sa-east-1/compute/lambdas/sender/main",
+                         "infra/accounts/staging/us-east-1/compute/lambdas/sender/main"]
+
+
+def test_codigo_de_aplicacao_nao_estima(tmp_path):
+    for t in ("head", "base"):
+        modulo_de_dominio(tmp_path / t)
+    h, _, env, _, _ = run(tmp_path, [("M", "apis/api/src/main.ts")], extra=["--root", "infra"])
+    assert h == [] and env["has_projects"] == "false"

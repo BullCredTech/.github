@@ -42,6 +42,22 @@ jobs:
       # TERRAFORM_MODULES_SSH_KEY: ${{ secrets.<CHAVE_SSH_SO_LEITURA> }}
 ```
 
+**Módulo de domínio (`bull-module-*`)**, com o IaC em `infra/` e código de aplicação no mesmo repo: filtre
+`paths` em `infra/**` e passe `path: infra`. Assim o workflow nem sobe em PR que só mexe em `apis/` ou
+`lambdas/`:
+
+```yaml
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'infra/**'
+# ...
+    with:
+      path: infra
+```
+
 ### Entradas
 
 | Entrada | Padrão | Para quê |
@@ -67,7 +83,10 @@ monta dois configs do Infracost (base e PR) só com os workspaces afetados:
    diretório com `.tf` que não é usado como módulo local por outro.
 2. Arquivo dentro de um workspace (inclusive `infracost-usage.yml`, JSON de policy etc.): esse workspace.
 3. Arquivo dentro de um **módulo local** (`modules/x`, ou qualquer diretório com `.tf` usado por um `source`
-   local): todo workspace que usa o módulo, inclusive via outro módulo.
+   local): todo workspace que usa o módulo, inclusive via outro módulo. Fonte com interpolação
+   (`${get_repo_root()}/x`, `${dirname(find_in_parent_folders("root.hcl"))}/x`) é procurada a partir da
+   raiz do repo e de cada ancestral do workspace, porque o `root.hcl` de um módulo de domínio fica em
+   `infra/`. Fonte com subdiretório (`dir//stacks/x`, o formato dos `bull-module-*`) aponta para `dir/stacks/x`.
 4. Outro `.hcl`/`.tf`/`.tfvars`/`.json` fora de workspace (`account.hcl`, `region.hcl`...): todos os
    workspaces abaixo dele, se couberem no teto. Se não couberem (ex.: `root.hcl`), o arquivo é listado como
    **não estimado**: na prática esses arquivos mexem em provider, state e tags, sem efeito de preço.
@@ -158,17 +177,18 @@ exige login no Infracost Cloud e grava os resultados lá; por isso não é usada
 
 Feito uma vez, por alguém com admin da org:
 
-1. Gerar a chave (gratuita) com uma conta de serviço/e-mail do time:
+1. Gerar a chave (gratuita) com uma conta de serviço/e-mail do time. Use o CLI **0.10.x** (o mesmo do
+   workflow): o 2.x trocou a chave por login no Infracost Cloud e não tem mais `configure`.
    ```bash
    infracost auth login            # abre o navegador; cria a conta e grava a chave localmente
    infracost configure get api_key # mostra a chave (formato ico-...)
    ```
    (Ou em https://dashboard.infracost.io → Org Settings → API key. Não precisa ligar nada no dashboard.)
-2. Criar o secret da org com acesso só aos repos que chamam o workflow:
+2. Criar o secret da org (exige admin da org e o escopo `admin:org` no `gh`). Com `--visibility all`
+   (como foi criado em 19/11/2026), ligar o workflow num repo novo não exige passo de admin:
    ```bash
-   gh secret set INFRACOST_API_KEY --org BullCredTech --visibility selected \
-     --repos bull-terraform-base-infra
-   # (cola a chave quando pedir; para incluir outro repo depois, repita com a lista completa)
+   gh auth refresh -h github.com -s admin:org
+   gh secret set INFRACOST_API_KEY --org BullCredTech --visibility all   # cola a chave quando pedir
    ```
 3. Nada a configurar no `.github`: o caller repassa o secret.
 
