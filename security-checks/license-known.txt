@@ -1,0 +1,5 @@
+# Pacotes npm que não declaram licença no package.json nem trazem arquivo LICENSE, mas cuja licença está
+# registrada no registry do npm (`npm view <nome>@<versão> license`). Sem esta lista, o check reprova o
+# pacote como "sem licença declarada". Não sobrepõe licença declarada pelo próprio pacote.
+# Formato: nome@versão SPDX   (uma versão por linha; revisado pelo time devops via CODEOWNERS)
+pause@0.0.1 MIT   # dependência do passport; registry: MIT (conferido em 10/11/2026)

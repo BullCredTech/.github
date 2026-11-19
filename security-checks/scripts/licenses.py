@@ -1,0 +1,468 @@
+"""Conferência de licenças de dependências Python (pip-licenses) e Dart/Flutter contra uma allowlist.
+
+Origem: porte dos dois scripts `verificar_licencas.py` que já rodavam em CI:
+  - um repo Python da org (via pip-licenses);
+  - um repo Dart/Flutter da org (detecção pelo texto do LICENSE).
+As funções normalizar(), termos() e detectar_licenca() vêm do script do mobile
+(nas funções de normalização os dois eram iguais). A diferença daqui: a allowlist
+NÃO é fixa no código; vem só de `--allow` (SPDX separados por ';').
+
+Por que normalizar em vez de comparar a string crua: o mesmo licenciamento chega
+em grafias diferentes (`BSD-3-Clause`, `BSD License`, `3-Clause BSD License`), e
+uma allowlist literal reprovaria duas delas. Sem isso o check falha por
+formatação e ensina a equipe a ignorá-lo.
+
+AND e OR seguem o SPDX (decisão do CTO em 10/11/2026): no OR basta uma opção
+permitida, porque quem usa escolhe a licença ("MIT OR GPL-3.0" é usado como
+MIT); no AND todas precisam estar. `;` e `/` fora de uma expressão (listas de
+classificadores, "MIT/X11") contam como AND, o lado conservador.
+
+Pacotes npm sem licença no package.json nem arquivo LICENSE, mas com a licença
+registrada no registry, podem entrar na lista central `--conhecidos`
+(`nome@versão SPDX`), revisada pelo time devops. Ela não sobrepõe licença declarada.
+
+Dart: pacotes do pub não declaram SPDX em lugar nenhum; o único sinal é o
+LICENSE na raiz do pacote, daí a detecção por marcador textual.
+
+Uso:
+  licenses.py pip  --allow "MIT;Apache-2.0" < saida-do-pip-licenses.json
+  licenses.py npm  --allow "MIT;Apache-2.0" < saida-do-npmwalk.json   (mesmo formato)
+  licenses.py site <site-packages>   (imprime o inventário JSON das distribuições instaladas, sem executar nada)
+  licenses.py dart --allow "MIT;Apache-2.0" <diretorio-do-projeto>
+Saída: 0 se tudo permitido; 1 se há licença fora da lista. Licença vazia/UNKNOWN
+só avisa ("sem licença declarada").
+"""
+import argparse
+import importlib.metadata as imd
+import json
+import os
+import re
+import sys
+from urllib.parse import unquote
+
+# Famílias que reprovam de forma explícita, para a mensagem dizer o motivo. Num SaaS, as que importam são
+# as de uso em rede ou de restrição de uso (AGPL, SSPL, OSL, EUPL, CPAL, BUSL); a GPL fica por causa do
+# código que vai para o navegador e de SDKs entregues a terceiros. A LGPL saiu em 10/11/2026: é copyleft
+# fraco e está na allowlist padrão.
+NEGADAS = {
+    'sspl-1.0', 'busl-1.1', 'osl-3.0', 'eupl-1.2', 'cpal-1.0',
+} | {f'{fam}-{suf}' for fam in ('gpl-2.0', 'gpl-3.0', 'agpl-3.0')
+     for suf in ('only', 'or-later')}
+
+# Pacotes internos da org (npm): o escopo @bull-* é publicado no CodeArtifact da Bull, e o código é
+# proprietário, por isso declara "UNLICENSED" (o valor que o npm recomenda para isso). Só essa licença
+# ganha a exceção, e só quando o nome bate com o escopo E com o lugar onde o pacote está instalado
+# (node_modules/@bull-x/nome): um pacote que apenas declara esse nome noutro diretório não vira interno.
+INTERNO_RE = re.compile(r'^@bull-[a-z0-9][a-z0-9-]*/[a-z0-9][a-z0-9._-]*$')
+
+# Grafias equivalentes -> forma normalizada.
+SINONIMOS = {
+    'mit license': 'mit',
+    'bsd license': 'bsd',
+    '3-clause bsd license': 'bsd-3-clause',
+    'bsd 3-clause': 'bsd-3-clause',
+    'new bsd license': 'bsd-3-clause',
+    '2-clause bsd license': 'bsd-2-clause',
+    'simplified bsd license': 'bsd-2-clause',
+    'apache software license': 'apache-2.0',
+    'apache license 2.0': 'apache-2.0',
+    'apache license, version 2.0': 'apache-2.0',
+    'apache 2.0': 'apache-2.0',
+    'the apache software license, version 2.0': 'apache-2.0',
+    'isc license': 'isc',
+    'isc license (iscl)': 'isc',
+    'mozilla public license 2.0 (mpl 2.0)': 'mpl-2.0',
+    'mozilla public license 2.0': 'mpl-2.0',
+    'the unlicense (unlicense)': 'unlicense',
+    # ids SPDX antigos (sem -only/-or-later) e com sufixo '+' valem como os atuais, para a allowlist e o pacote
+    # se encontrarem independentemente da grafia
+    'gpl-2.0': 'gpl-2.0-only', 'gpl-2.0+': 'gpl-2.0-or-later',
+    'gpl-3.0': 'gpl-3.0-only', 'gpl-3.0+': 'gpl-3.0-or-later',
+    'lgpl-2.0': 'lgpl-2.0-only', 'lgpl-2.0+': 'lgpl-2.0-or-later',
+    'lgpl-2.1': 'lgpl-2.1-only', 'lgpl-2.1+': 'lgpl-2.1-or-later',
+    'lgpl-3.0': 'lgpl-3.0-only', 'lgpl-3.0+': 'lgpl-3.0-or-later',
+    'agpl-3.0': 'agpl-3.0-only', 'agpl-3.0+': 'agpl-3.0-or-later',
+}
+
+# Títulos de classificadores `License ::` do PyPI (e grafias comuns) -> id SPDX. Aplicados ANTES de separar em
+# termos: "GNU General Public License v2 or later (GPLv2+)" tem um " or " que não é o OR de uma expressão.
+# Sem versão ("GNU General Public License (GPL)") vale a leitura conservadora: -or-later (a mais permissiva em
+# versões, então a que precisa de exceção explícita).
+_CLASSIFICADORES = {
+    'gnu affero general public license v3 or later (agplv3+)': 'AGPL-3.0-or-later',
+    'gnu affero general public license v3': 'AGPL-3.0-only',
+    'gnu general public license v2 or later (gplv2+)': 'GPL-2.0-or-later',
+    'gnu general public license v2 (gplv2)': 'GPL-2.0-only',
+    'gnu general public license v3 or later (gplv3+)': 'GPL-3.0-or-later',
+    'gnu general public license v3 (gplv3)': 'GPL-3.0-only',
+    'gnu general public license (gpl)': 'GPL-2.0-or-later',
+    'gnu lesser general public license v2 or later (lgplv2+)': 'LGPL-2.0-or-later',
+    'gnu lesser general public license v2 (lgplv2)': 'LGPL-2.0-only',
+    'gnu lesser general public license v3 or later (lgplv3+)': 'LGPL-3.0-or-later',
+    'gnu lesser general public license v3 (lgplv3)': 'LGPL-3.0-only',
+    'gnu library or lesser general public license (lgpl)': 'LGPL-2.0-or-later',
+    'mozilla public license 1.0 (mpl)': 'MPL-1.0',
+    'mozilla public license 1.1 (mpl 1.1)': 'MPL-1.1',
+    'mozilla public license 2.0 (mpl 2.0)': 'MPL-2.0',
+    'eclipse public license 1.0 (epl-1.0)': 'EPL-1.0',
+    'eclipse public license 2.0 (epl-2.0)': 'EPL-2.0',
+    'european union public licence 1.0 (eupl 1.0)': 'EUPL-1.0',
+    'european union public licence 1.1 (eupl 1.1)': 'EUPL-1.1',
+    'european union public licence 1.2 (eupl 1.2)': 'EUPL-1.2',
+    'python software foundation license': 'PSF-2.0',
+    'academic free license (afl)': 'AFL-3.0',
+    # Permissivas da allowlist padrão: sem o mapa, o título não casa com o id (aws-lambda-powertools declara
+    # MIT-0), e o "/" do zlib/libpng separaria um termo "libpng license".
+    'mit no attribution license (mit-0)': 'MIT-0',
+    'cmu license (mit-cmu)': 'MIT-CMU',
+    'zero-clause bsd (0bsd)': '0BSD',
+    'blue oak model license (blueoak-1.0.0)': 'BlueOak-1.0.0',
+    'cc0 1.0 universal (cc0 1.0) public domain dedication': 'CC0-1.0',
+    'zlib/libpng license': 'Zlib',
+}
+_RE_CLASSIFICADOR = re.compile('|'.join(re.escape(k) for k in sorted(_CLASSIFICADORES, key=len, reverse=True)), re.IGNORECASE)
+_RE_OR_LATER = re.compile(r'\s+or\s+(?:any\s+)?later(?:\s+version)?', re.IGNORECASE)
+
+_SEPARADORES = re.compile(r'\s+AND\s+|\s+OR\s+|\s*;\s*|\s*/\s*', re.IGNORECASE)
+
+# Títulos, casados só no cabeçalho do arquivo (a MPL-2.0 cita a GPL/AGPL no corpo).
+_TITULOS = (
+    ('mozilla public license', 'mpl-2.0'),
+    ('gnu affero general public license', 'agpl-3.0'),
+    ('gnu lesser general public license', 'lgpl-3.0'),
+    ('gnu general public license', 'gpl-3.0'),
+    ('apache license', 'apache-2.0'),
+    ('cc0 1.0 universal', 'cc0-1.0'),
+    ('creative commons zero', 'cc0-1.0'),
+)
+
+# Licenças curtas, sem linha de título. BSD-3 antes da BSD-2 (a 3 contém a 2).
+_CORPO = (
+    ('permission is hereby granted, free of charge', 'mit'),
+    ('permission to use, copy, modify, and/or distribute', 'isc'),
+    ('permission to use, copy, modify, and distribute', 'isc'),
+    ('neither the name', 'bsd-3-clause'),
+    ('redistribution and use in source and binary forms', 'bsd-2-clause'),
+    ('this is free and unencumbered software released into the public domain',
+     'unlicense'),
+)
+
+
+def normalizar(termo):
+    """Uma grafia de licença -> a forma canônica. `''` quando não dá para dizer."""
+    t = termo.strip().strip('.').strip().lower()
+    if not t or t in ('unknown', 'n/a', 'none'):
+        return ''
+    if t in SINONIMOS:
+        return SINONIMOS[t]
+    # Parênteses de expressão SPDX, "(MIT OR Apache-2.0)": tira só os das pontas.
+    t = t.strip('() ').strip()
+    if not t:
+        return ''
+    return SINONIMOS.get(t, t)
+
+
+def termos(licenca):
+    """Todos os termos de um licenciamento, já normalizados e sem vazios."""
+    texto = _RE_CLASSIFICADOR.sub(lambda m: _CLASSIFICADORES[m.group(0).lower()], licenca or '')
+    texto = _RE_OR_LATER.sub('+', texto)   # "v9 or later" é um sufixo, não um OR
+    return [n for n in (normalizar(p) for p in _SEPARADORES.split(texto)) if n]
+
+
+_RE_TOKENS = re.compile(r'(\(|\)|\s+AND\s+|\s+OR\s+)', re.IGNORECASE)
+_RE_LISTA = re.compile(r'\s*;\s*|\s*/\s*')
+
+
+def fora_da_lista(licenca, permitidas):
+    """Termos que impedem o licenciamento; `[]` quando ele é permitido (semântica SPDX, ver o topo).
+
+    Expressão malformada (parêntese sem par, operador solto) => ValueError: quem chama cai na regra
+    antiga, em que todo termo precisa estar permitido.
+    """
+    texto = _RE_CLASSIFICADOR.sub(lambda m: _CLASSIFICADORES[m.group(0).lower()], licenca or '')
+    texto = _RE_OR_LATER.sub('+', texto)
+    tokens = [t.strip() for t in _RE_TOKENS.split(texto) if t and t.strip()]
+    pos = 0
+
+    def atomo():
+        nonlocal pos
+        if pos >= len(tokens):
+            raise ValueError('expressão termina num operador')
+        tok = tokens[pos]
+        if tok == '(':
+            pos += 1
+            fora = ou()
+            if pos >= len(tokens) or tokens[pos] != ')':
+                raise ValueError('parêntese sem fechamento')
+            pos += 1
+            return fora
+        if tok == ')' or tok.upper() in ('AND', 'OR'):
+            raise ValueError(f'token inesperado: {tok}')
+        pos += 1
+        lista = [n for n in (normalizar(p) for p in _RE_LISTA.split(tok)) if n]
+        if not lista:
+            return ['?']   # opção sem licença reconhecível nunca conta como permitida
+        return [t for t in lista if not _permitido(t, permitidas)]
+
+    def e():
+        nonlocal pos
+        fora = atomo()
+        while pos < len(tokens) and tokens[pos].upper() == 'AND':
+            pos += 1
+            fora = fora + atomo()
+        return fora
+
+    def ou():
+        nonlocal pos
+        opcoes = [e()]
+        while pos < len(tokens) and tokens[pos].upper() == 'OR':
+            pos += 1
+            opcoes.append(e())
+        return [] if any(not o for o in opcoes) else [t for o in opcoes for t in o]
+
+    fora = ou()
+    if pos != len(tokens):
+        raise ValueError('sobrou texto depois da expressão')
+    return list(dict.fromkeys(fora))
+
+
+def carregar_conhecidos(caminho):
+    """`nome@versão SPDX` por linha (comentários com #) -> {'nome@versão': 'SPDX'}."""
+    conhecidos = {}
+    with open(caminho, encoding='utf-8') as f:
+        for n, linha in enumerate(f, 1):
+            linha = linha.split('#', 1)[0].strip()
+            if not linha:
+                continue
+            partes = linha.split()
+            if len(partes) != 2 or '@' not in partes[0].lstrip('@'):
+                raise ValueError(f'{caminho}:{n}: esperado "nome@versão SPDX"')
+            conhecidos[partes[0]] = partes[1]
+    return conhecidos
+
+
+def detectar_licenca(texto):
+    """Texto de um LICENSE -> identificador SPDX-ish. `''` quando não reconhece."""
+    cabecalho = ' '.join(texto[:300].lower().split())
+    for marcador, licenca in _TITULOS:
+        if marcador in cabecalho:
+            return licenca
+    corpo = ' '.join(texto[:4000].lower().split())
+    for marcador, licenca in _CORPO:
+        if marcador in corpo:
+            return licenca
+    return ''
+
+
+def permitidas_normalizadas(allow):
+    """`--allow` ("MIT;Apache-2.0") -> conjunto normalizado."""
+    return {t for t in (normalizar(p) for p in allow.split(';')) if t}
+
+
+def inventario_pip(texto):
+    """`[{'Name','Version','License'}]` do JSON do `pip-licenses --format=json`."""
+    dados = json.loads(texto)
+    if not isinstance(dados, list):
+        raise ValueError('esperava uma lista JSON')
+    return dados
+
+
+def inventario_dart(diretorio):
+    """`[{'Name','Version','License'}]` dos pacotes resolvidos pelo pub."""
+    caminho = os.path.join(diretorio, '.dart_tool', 'package_config.json')
+    if not os.path.isfile(caminho):
+        sys.exit(f'{caminho} não existe: rode `flutter pub get` em {diretorio} antes.')
+    with open(caminho, encoding='utf-8') as fh:
+        config = json.load(fh)
+
+    pacotes = []
+    for p in config.get('packages', []):
+        raiz = p.get('rootUri', '')
+        if raiz.startswith('file://'):
+            raiz = unquote(raiz[len('file://'):])
+        else:
+            # rootUri sem esquema é relativo ao diretório .dart_tool/ (onde está o package_config.json)
+            raiz = os.path.normpath(os.path.join(diretorio, '.dart_tool', unquote(raiz)))
+
+        licenca = ''
+        for nome_arquivo in ('LICENSE', 'LICENSE.md', 'LICENSE.txt', 'COPYING'):
+            arquivo = os.path.join(raiz, nome_arquivo)
+            if os.path.isfile(arquivo):
+                with open(arquivo, encoding='utf-8', errors='replace') as fh:
+                    licenca = detectar_licenca(fh.read())
+                break
+
+        # Versão: do nome do diretório do pub cache (`<pacote>-<versão>`); `local` para path deps.
+        base = os.path.basename(os.path.normpath(raiz))
+        versao = base.rsplit('-', 1)[1] if '-' in base else 'local'
+        pacotes.append({'Name': p.get('name', '?'), 'Version': versao, 'License': licenca})
+    return pacotes
+
+
+_BASE = {'pip', 'setuptools', 'wheel', 'distribute', '_distutils_hack'}
+
+
+def _licenca_dist(meta):
+    """Expressão SPDX (PEP 639) > classificadores `License ::` > campo License (texto longo é reconhecido)."""
+    expr = (meta.get('License-Expression') or '').strip()
+    if expr:
+        return expr
+    classes = []
+    for c in meta.get_all('Classifier') or []:
+        if c.startswith('License ::') and c.strip() != 'License :: OSI Approved':
+            classes.append(c.split(' :: ')[-1].strip())
+    if classes:
+        return '; '.join(classes)
+    campo = (meta.get('License') or '').strip()
+    if campo and ('\n' in campo or len(campo) > 100):
+        reconhecida = detectar_licenca(campo)
+        # texto longo que não se reconhece vai como uma linha só e REPROVA na allowlist (vazio/UNKNOWN só avisa)
+        return reconhecida or ' '.join(campo.split())[:200]
+    return campo
+
+
+def inventario_site(diretorio):
+    """Inventário das distribuições instaladas em `diretorio`, lendo só metadados (.dist-info/.egg-info).
+
+    Não importa nem executa nada instalado; roda com `-I -S` (sem processar .pth).
+    """
+    pacotes = {}
+    for dist in imd.distributions(path=[diretorio]):
+        nome = dist.metadata['Name'] or '?'
+        if nome.lower().replace('_', '-') in _BASE:
+            continue
+        pacotes[(nome, dist.version)] = {'Name': nome, 'Version': dist.version, 'License': _licenca_dist(dist.metadata)}
+    return sorted(pacotes.values(), key=lambda p: (p['Name'].lower(), p['Version']))
+
+
+def _permitido(termo, permitidas):
+    if termo in permitidas:
+        return True
+    # "BSD" sem variante (grafia ambígua do PyPI) vale se alguma BSD-N-Clause está na lista.
+    return termo == 'bsd' and any(p.startswith('bsd-') for p in permitidas)
+
+
+def interno_unlicensed(p):
+    """Pacote interno @bull-* instalado no próprio caminho e com licença exatamente UNLICENSED (ver INTERNO_RE)."""
+    nome = p.get('Name', '') or ''
+    caminho = (p.get('Path', '') or '').replace('\\', '/')
+    return (INTERNO_RE.match(nome) is not None
+            and (caminho == f'node_modules/{nome}' or caminho.endswith(f'/node_modules/{nome}'))
+            and termos(p.get('License', '') or '') == ['unlicensed'])
+
+
+def avaliar(pacotes, permitidas, estrito=False, internos=None, conhecidos=None, usados=None):
+    """`(reprovados, indefinidos)`: cada item é `(nome, versão, licença, razão)`.
+
+    estrito (npm): sem licença declarada nem reconhecível no LICENSE => reprova, não só avisa.
+    internos (npm): lista que recebe os pacotes @bull-* com UNLICENSED, que passam (ver INTERNO_RE).
+    conhecidos (npm): {'nome@versão': 'SPDX'} para pacote sem licença declarada nem LICENSE; os que
+    forem usados vão para `usados`.
+    """
+    reprovados, indefinidos = [], []
+    for p in pacotes:
+        nome = p.get('Name', '?')
+        versao = p.get('Version', '?')
+        if internos is not None and interno_unlicensed(p):
+            internos.append((nome, versao))
+            continue
+        licenca = p.get('License', '') or ''
+        if estrito and not termos(licenca):
+            licenca = detectar_licenca(p.get('LicenseText', '') or '')
+        if estrito and not termos(licenca) and conhecidos and f'{nome}@{versao}' in conhecidos:
+            licenca = conhecidos[f'{nome}@{versao}']
+            if usados is not None:
+                usados.append((nome, versao, licenca))
+        lista = termos(licenca)
+        if not lista and estrito:
+            caminho = p.get('Path', '?')
+            reprovados.append((nome, versao, 'UNKNOWN',
+                               f'sem licença declarada: {nome}@{versao} ({caminho}) — se for aceitável, peça exceção'))
+            continue
+        if not lista:
+            indefinidos.append((nome, versao, licenca or 'UNKNOWN', 'não declarada'))
+            continue
+        try:
+            fora = fora_da_lista(licenca, permitidas)
+        except ValueError:
+            fora = [t for t in lista if not _permitido(t, permitidas)]
+        if not fora:
+            continue
+        negadas = [t for t in fora if t in NEGADAS]
+        razao = (f'copyleft forte: {", ".join(negadas)}' if negadas
+                 else f'fora da allowlist: {", ".join(fora)}')
+        reprovados.append((nome, versao, licenca, razao))
+    return reprovados, indefinidos
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
+    ap.add_argument('modo', choices=['pip', 'npm', 'dart', 'site'])
+    ap.add_argument('--allow', default='', help='SPDX separados por ";"')
+    ap.add_argument('--conhecidos', default='', help='arquivo "nome@versão SPDX" (só npm)')
+    ap.add_argument('diretorio', nargs='?', default='.')
+    args = ap.parse_args(argv)
+
+    if args.modo == 'site':
+        print(json.dumps(inventario_site(args.diretorio)))
+        return 0
+    if not args.allow:
+        ap.error('--allow é obrigatório')
+    permitidas = permitidas_normalizadas(args.allow)
+    if args.modo in ('pip', 'npm'):
+        try:
+            pacotes = inventario_pip(sys.stdin.read())
+        except ValueError as e:  # JSONDecodeError é ValueError
+            print(f'entrada inválida do inventário ({args.modo}): {e}', file=sys.stderr)
+            return 2
+        origem = 'ambiente python' if args.modo == 'pip' else 'node_modules'
+    else:
+        pacotes = inventario_dart(args.diretorio)
+        origem = args.diretorio
+
+    conhecidos = {}
+    if args.conhecidos and args.modo == 'npm':
+        try:
+            conhecidos = carregar_conhecidos(args.conhecidos)
+        except (OSError, ValueError) as e:
+            print(f'lista de licenças conhecidas inválida: {e}', file=sys.stderr)
+            return 2
+    internos = [] if args.modo == 'npm' else None
+    usados = []
+    reprovados, indefinidos = avaliar(pacotes, permitidas, estrito=(args.modo == 'npm'), internos=internos,
+                                      conhecidos=conhecidos, usados=usados)
+    print(f'{len(pacotes)} pacotes inventariados em: {origem}')
+
+    if usados:
+        print(f'\n{len(usados)} pacote(s) sem licença no package.json, pela lista de conhecidos:')
+        for nome, versao, licenca in sorted(set(usados)):
+            print(f'  - {nome} {versao}: {licenca}')
+
+    if internos:
+        print(f'\n{len(internos)} pacote(s) interno(s) @bull-* com UNLICENSED (aceitos):')
+        for nome, versao in sorted(set(internos)):
+            print(f'  - {nome} {versao}')
+
+    # Licença não declarada NÃO reprova (senão o check vira ruído); sai listada.
+    if indefinidos:
+        print(f'\n{len(indefinidos)} sem licença declarada (não reprovam):')
+        for nome, versao, licenca, _ in sorted(indefinidos):
+            print(f'  - {nome} {versao}: {licenca}')
+
+    if not reprovados:
+        print('\nOK: nenhuma licença fora da allowlist.')
+        return 0
+
+    print(f'\nREPROVADO: {len(reprovados)} pacote(s):')
+    for nome, versao, licenca, razao in sorted(reprovados):
+        if razao.startswith('sem licença declarada:'):
+            print(f'  - {razao}')
+        else:
+            print(f'  - {nome} {versao}: "{licenca}" ({razao})')
+    print('\nDecida caso a caso: ou o pacote sai, ou a licença entra em '
+          '`license.extra_allowed` no .github/security-checks.yml, com o motivo escrito.')
+    return 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())

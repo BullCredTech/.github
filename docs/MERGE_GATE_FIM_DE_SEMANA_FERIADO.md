@@ -47,13 +47,7 @@ A mensagem do gate sempre informa o motivo do bloqueio e quem precisa aprovar.
 
 ## Override pra emergência
 
-Em incidente real em produção fora do horário comercial, quando não dá pra esperar a aprovação humana, **administradores da organização podem fazer override pela UI do GitHub**:
-
-1. No PR bloqueado, clicar em "Merge pull request".
-2. Selecionar "Merge without waiting for requirements to be met (bypass rules)".
-3. Confirmar.
-
-Esse override **deixa rastro auditável** no log da org. Use só quando o impacto de esperar é maior que o risco da revisão acelerada — e abra retroativamente um post-mortem leve explicando o motivo.
+Em incidente real em produção, quando não dá para esperar a aprovação, fale com o responsável pelo gate. O procedimento de override fica na documentação interna da organização.
 
 ## Como o gate é mantido
 
@@ -64,55 +58,7 @@ Esse override **deixa rastro auditável** no log da org. Use só quando o impact
 
 ## Exceções concedidas
 
-Alguns repositórios são isentos de parte das proteções de merge na `main`. A exceção é **aplicada nas org Rulesets** (`Settings → Code, planning, and automation → Rulesets`) por um admin e **registrada nesta tabela** com motivo e data, pra manter rastro auditável.
-
-| Repositório | Isento de | Motivo | Aprovado por | Data |
-|---|---|---|---|---|
-| `bull-web-portfolio-dashboards` | Gate de fim de semana/feriado | (pré-existente — sem registro documentado) | — | — |
-| `bull-datascience-analises` | Gate de fim de semana/feriado **+** exigência de aprovação humana de PR | Repo de análises exploratórias; iteração rápida sem gargalo de review humano, mantendo os controles de segurança | @lucas-bullbanker | 2026-07-27 |
-| Família `bull-datalake` (8 repos — [lista abaixo](#família-bull-datalake-2026-08-20)) | Gate de fim de semana/feriado | Pipelines de ingestão executam sábado e domingo; correção de carga quebrada não pode esperar até segunda | @lucas-bullbanker | 2026-08-20 |
-| Família `bull-datalake` **exceto** `bull-datalake-pipelines` (7 repos — [lista abaixo](#isenção-de-aprovação-humana-na-família-bull-datalake-2026-09-30)) | Exigência de aprovação humana de PR | Dar mais liberdade aos times que trabalham com Databricks, removendo o gargalo do segundo aprovador sem abrir mão dos controles de segurança. `bull-datalake-pipelines` foi mantido sob aprovação por decisão explícita | @lucas-bullbanker | 2026-09-30 |
-
-**Importante:** isentar da aprovação humana **não** remove os demais controles. Os repos isentos continuam exigindo PR (push direto na `main` bloqueado), passam pelos 4 security checks obrigatórios (Gitleaks, Semgrep, Trivy, License) e mantêm proteção contra deleção e force-push — tudo via a ruleset **`Protect main — repos sem review humano`**. A isenção só zera o número de aprovações exigidas.
-
-Essa ruleset é o **único** lugar onde a isenção de aprovação é concedida, e ela funciona em par com o `exclude` da `Protect main branch`: rulesets do GitHub são cumulativas e a regra mais restritiva vence, então um repo só chega a 0 aprovações se estiver **simultaneamente** no `exclude` da `Protect main branch` e no `include` da `Protect main — repos sem review humano`. Conceder a isenção a um repo novo exige as duas pontas.
-
-### Família `bull-datalake` (2026-08-20)
-
-Repositórios no `exclude` da ruleset `weekend-holiday-merge-gate-required`:
-
-- `bull-datalake`
-- `bull-datalake-bi`
-- `bull-datalake-cobranca`
-- `bull-datalake-data-science`
-- `bull-datalake-financeiro`
-- `bull-datalake-operacao`
-- `bull-datalake-pipelines`
-- `bull-datalake-template`
-
-A isenção **desta seção** cobre apenas o gate de fim de semana/feriado. Sete desses repos receberam depois uma segunda isenção, da aprovação humana — ver [Isenção de aprovação humana na família `bull-datalake` (2026-09-30)](#isenção-de-aprovação-humana-na-família-bull-datalake-2026-09-30). O `bull-datalake-pipelines` permanece integralmente sob a `Protect main branch`: PR obrigatório (push direto na `main` bloqueado), 1 aprovação humana, os 4 security checks (Gitleaks, Semgrep, Trivy, License), dismissal de review stale em push, resolução de threads e proteção contra deleção e force-push.
-
-**Por que nomes explícitos e não o padrão `bull-datalake*`:** um wildcard isentaria automaticamente qualquer repositório futuro com esse prefixo — sem PR, sem motivo registrado e sem data, o que contradiz o modelo de exceção descrito acima. Com os nomes listados um a um, um repo novo da família **nasce coberto pelo gate** e só sai dele por decisão registrada. Ao criar um `bull-datalake-*` novo, decida explicitamente se ele entra na isenção e, se sim, abra PR aqui.
-
-### Isenção de aprovação humana na família `bull-datalake` (2026-09-30)
-
-Repositórios no `include` da ruleset `Protect main — repos sem review humano` e no `exclude` da `Protect main branch`:
-
-- `bull-datalake`
-- `bull-datalake-bi`
-- `bull-datalake-cobranca`
-- `bull-datalake-data-science`
-- `bull-datalake-financeiro`
-- `bull-datalake-operacao`
-- `bull-datalake-template`
-
-**`bull-datalake-pipelines` ficou deliberadamente de fora** e continua exigindo 1 aprovação humana. Ele é o único repo da família que segue sob a `Protect main branch`.
-
-**Motivação:** dar mais liberdade aos times que trabalham com Databricks, cujo ciclo de iteração vinha travando na espera por um segundo aprovador.
-
-Nesses 7 repos, o merge na `main` passou a exigir: PR aberto (push direto continua bloqueado), os 4 security checks (Gitleaks, Semgrep, Trivy, License) verdes, e nenhuma aprovação humana. Seguem valendo as proteções contra deleção e force-push. Como esses repos também já estavam isentos do gate de fim de semana/feriado, um PR com os checks verdes pode ser mergeado por uma pessoa só, em qualquer dia da semana.
-
-**Ao criar um `bull-datalake-*` novo:** ele nasce exigindo 1 aprovação e coberto pelo gate de fim de semana — o wildcard continua não sendo usado, pela mesma razão descrita na seção anterior. Entrar em qualquer uma das duas isenções exige PR aqui e a mudança correspondente nas org Rulesets.
+Exceções às proteções de merge são aplicadas nas rulesets da organização por um admin e registradas, com motivo e data, na documentação interna da organização.
 
 ## Testando o gate antes de uma mudança real
 
