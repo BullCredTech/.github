@@ -1,0 +1,10 @@
+{
+  "owner": "BullCredTech",
+  "repos": [
+    "bull-module-proposals"
+  ],
+  "baseBranch": "main",
+  "timezone": "America/Sao_Paulo",
+  "docsRepo": "BullCredTech/bull-api-docs-gitbook",
+  "digestHour": 9
+}
