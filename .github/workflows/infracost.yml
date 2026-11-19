@@ -1,0 +1,161 @@
+name: infracost
+
+# Workflow reutilizável: comenta no PR a mudança de custo mensal estimada (antes × depois, por
+# recurso) de quem mexe em Terraform/Terragrunt. Informativo: nunca bloqueia o merge.
+# Doc: docs/INFRACOST.md (o que faz, como ligar num repo, limites, o que sai para o Infracost).
+#
+# Regras deste arquivo (as mesmas do security-checks-required.yml):
+#  - todo `run:` recebe valores dinâmicos só por `env:` (nunca expressão dentro do script);
+#  - toda `uses:` fica fixada por SHA;
+#  - só a Pricing API do Infracost é usada (parse de HCL, sem `terraform plan`, sem credencial
+#    AWS, sem Infracost Cloud). Sem a chave, o job termina verde com aviso.
+on:
+  workflow_call:
+    inputs:
+      path:
+        description: 'Raiz do IaC dentro do repo (ex.: `.`, `infra`).'
+        type: string
+        default: '.'
+      config-file:
+        description: Config do Infracost versionado no repo (desliga a escolha automática de workspaces).
+        type: string
+        default: ''
+      max-projects:
+        description: Teto de workspaces estimados por PR (o resto é listado como não estimado).
+        type: number
+        default: 40
+      include-dependents:
+        description: Estima também os workspaces que dependem (dependency do Terragrunt) dos alterados.
+        type: boolean
+        default: true
+      usage-file-name:
+        description: Nome do arquivo de uso por workspace (custo por GB/requisição).
+        type: string
+        default: infracost-usage.yml
+    secrets:
+      INFRACOST_API_KEY:
+        description: Chave da Pricing API do Infracost (gratuita). Sem ela, o job só avisa.
+        required: false
+      TERRAFORM_MODULES_SSH_KEY:
+        description: Chave SSH só leitura para módulos em repo git privado (git@github.com:...).
+        required: false
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  infracost:
+    name: infracost
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: write
+    concurrency:
+      group: infracost-${{ github.repository }}-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    steps:
+      - name: Chave da API
+        id: key
+        env:
+          KEY: ${{ secrets.INFRACOST_API_KEY }}
+          SSH_KEY: ${{ secrets.TERRAFORM_MODULES_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "$KEY" ]; then
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            msg="Infracost sem API key: configure o secret da org INFRACOST_API_KEY (passo a passo em https://github.com/BullCredTech/.github/blob/main/docs/INFRACOST.md). Nada foi estimado."
+            echo "::warning::$msg"
+            echo "### :warning: $msg" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
+          if [ -n "$SSH_KEY" ]; then echo "ssh=true" >> "$GITHUB_OUTPUT"; else echo "ssh=false" >> "$GITHUB_OUTPUT"; fi
+
+      # Scripts deste workflow, no commit exato do arquivo que está rodando: job.workflow_sha é o
+      # do workflow reutilizável (github.workflow_sha seria o do repo que chama). Lido via
+      # toJSON(job) porque o actionlint ainda não conhece essas propriedades (set/2026).
+      # Sem o SHA, cai para o ref do workflow (o @main do caller) com aviso; repo errado é erro.
+      - name: Origem do workflow
+        id: central
+        if: steps.key.outputs.present == 'true'
+        env:
+          JOB_CTX: ${{ toJSON(job) }}
+        run: |
+          set -euo pipefail
+          repo="$(jq -r '.workflow_repository // empty' <<< "$JOB_CTX")"
+          sha="$(jq -r '.workflow_sha // empty' <<< "$JOB_CTX")"
+          ref="$(jq -r '.workflow_ref // empty' <<< "$JOB_CTX")"
+          echo "workflow_repository=$repo workflow_sha=$sha workflow_ref=$ref"
+          if [ -n "$repo" ] && [ "$repo" != "BullCredTech/.github" ]; then
+            echo "::error::este workflow não está rodando a partir de BullCredTech/.github ($repo)"; exit 1
+          fi
+          if [[ "$sha" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]]; then
+            echo "ref=$sha" >> "$GITHUB_OUTPUT"
+          else
+            r="${ref##*@}"; r="${r#refs/heads/}"; r="${r#refs/tags/}"
+            [[ "$r" =~ ^[A-Za-z0-9._/-]+$ ]] || r=main
+            echo "::warning::job.workflow_sha indisponível; scripts do ref '$r'"
+            echo "ref=$r" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Merge commit do PR (o padrão do evento pull_request); com profundidade 2 o primeiro pai
+      # é a base contra a qual o GitHub montou o merge.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.key.outputs.present == 'true'
+        with: { path: head, fetch-depth: 2, persist-credentials: false }
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.key.outputs.present == 'true'
+        with: { repository: BullCredTech/.github, ref: '${{ steps.central.outputs.ref }}', path: .org-infracost, persist-credentials: false }
+
+      - name: Base e arquivos alterados
+        if: steps.key.outputs.present == 'true'
+        env:
+          EVENT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          base="$(git -C head rev-parse HEAD^1)"
+          echo "base do merge: $base (base.sha do evento: $EVENT_BASE_SHA)"
+          git -C head worktree add --detach "$GITHUB_WORKSPACE/base" "$base"
+          git -C head diff --name-status -M "$base" HEAD > "$RUNNER_TEMP/changes.txt"
+          echo "Arquivos alterados: $(wc -l < "$RUNNER_TEMP/changes.txt")"
+
+      - uses: webfactory/ssh-agent@e83874834305fe9a4a2997156cb26c5de65a8555 # v0.10.0
+        if: steps.key.outputs.present == 'true' && steps.key.outputs.ssh == 'true'
+        with:
+          ssh-private-key: ${{ secrets.TERRAFORM_MODULES_SSH_KEY }}
+
+      # Versão do CLI fixa (não `0.10.x`): o número só muda por PR revisado aqui.
+      # O CLI 0.10 é o que fala só com a Pricing API; o 2.x exige login no Infracost Cloud.
+      - uses: infracost/actions/setup@a5783eb98adc93aa7a0049fce0abb06fdd30770a # v5.0.1
+        if: steps.key.outputs.present == 'true'
+        with:
+          api-key: ${{ secrets.INFRACOST_API_KEY }}
+          version: 0.10.50
+          enable-dashboard: 'false'
+
+      - name: Estimar
+        id: run
+        if: steps.key.outputs.present == 'true'
+        env:
+          IAC_PATH: ${{ inputs.path }}
+          CONFIG_FILE: ${{ inputs.config-file }}
+          MAX_PROJECTS: ${{ inputs.max-projects }}
+          INCLUDE_DEPENDENTS: ${{ inputs.include-dependents }}
+          USAGE_FILE_NAME: ${{ inputs.usage-file-name }}
+        run: |
+          set -euo pipefail
+          bash .org-infracost/infracost/scripts/run.sh head base "$RUNNER_TEMP/changes.txt" "$RUNNER_TEMP/infracost"
+          cat "$RUNNER_TEMP/infracost/full.md" >> "$GITHUB_STEP_SUMMARY"
+          cat "$RUNNER_TEMP/infracost/has_projects" >> "$GITHUB_OUTPUT"
+
+      - name: Comentar no PR
+        if: steps.key.outputs.present == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          HAS_PROJECTS: ${{ steps.run.outputs.has_projects }}
+        run: bash .org-infracost/infracost/scripts/comment.sh "$RUNNER_TEMP/infracost/comment.md" "$HAS_PROJECTS"
