@@ -96,7 +96,7 @@ Um `skip` desliga o check inteiro naquele repo; prefira `license.extra_allowed` 
 
 ## 5. Supressões inline
 
-Supressões no próprio código continuam permitidas: `gitleaks:allow`, `nosemgrep` e `trivy:ignore` (sem diferenciar maiúsculas). Para ficarem **visíveis na revisão**, os jobs `gitleaks` e `semgrep` listam as linhas **adicionadas pelo PR** que contêm essas marcas, com uma seção "supressões adicionadas neste PR" no resumo do job e uma anotação de aviso por linha. Isso **nunca reprova** o job: o controle real é a revisão humana de quem aprova o PR.
+Supressões no próprio código continuam permitidas: `gitleaks:allow`, `nosemgrep` e `trivy:ignore` (sem diferenciar maiúsculas). Para ficarem **visíveis na revisão**, os jobs `gitleaks` e `semgrep` listam as linhas **adicionadas pelo PR** que contêm essas marcas, com uma seção "supressões adicionadas neste PR" no resumo do job e uma anotação de aviso por linha. Isso **nunca reprova** o job: o controle real é a revisão humana de quem aprova o PR. A busca usa a regex do próprio bash, sem abrir processo por linha: um PR que move milhares de arquivos soma centenas de milhares de linhas adicionadas, e um `grep` por linha estourava o tempo do job (`bull-module-proposals` #395, ~405 mil linhas, cancelado aos 10 min; com a regex do bash, 66 s).
 
 ## 6. Como pedir uma exceção
 

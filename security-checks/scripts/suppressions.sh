@@ -25,6 +25,12 @@ seguro() {
 tmp="$(mktemp)"; trap 'rm -f "$tmp"' EXIT
 git diff --name-only --no-renames -z --end-of-options "$base...$head" > "$tmp" 2>/dev/null || aviso "git diff falhou, supressões não listadas"
 
+# regex do próprio bash, sem processo por linha: um PR que move milhares de arquivos soma centenas de
+# milhares de linhas adicionadas, e um grep por linha estourava o timeout do job
+export LC_ALL=C
+shopt -s nocasematch
+marca='gitleaks:allow|nosemgrep|trivy:ignore'
+
 achados=()
 while IFS= read -r -d '' arq; do
   n=0; cab=1   # cab=1: ainda no cabeçalho do diff (antes do primeiro @@)
@@ -40,7 +46,7 @@ while IFS= read -r -d '' arq; do
     esac
     case "$linha" in
       +*)
-        if printf '%s' "$linha" | LC_ALL=C grep -qiE 'gitleaks:allow|nosemgrep|trivy:ignore'; then
+        if [[ "$linha" =~ $marca ]]; then
           achados+=("$(seguro "$arq")|$n")
         fi
         n=$((n+1))
